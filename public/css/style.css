@@ -178,6 +178,22 @@ body {
     background-color: #7f8c8d;
 }
 
+.btn-info {
+    background-color: #3498db;
+    color: white;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+.btn-info:hover {
+    background-color: #2980b9;
+}
+
+.btn-small {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}
+
 /* Toggle Text */
 .toggle-text {
     text-align: center;
@@ -275,6 +291,27 @@ body {
 .esp-actions {
     display: flex;
     gap: 0.5rem;
+}
+
+.esp-actions-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.esp-actions-toolbar .btn {
+    flex: 1;
+    margin: 0;
+}
+
+/* File input styling */
+label.btn {
+    position: relative;
+    overflow: hidden;
+}
+
+label.btn input[type="file"] {
+    display: none;
 }
 
 .empty-message {

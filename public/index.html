@@ -13,6 +13,7 @@
             <div class="nav-content">
                 <h1 class="logo">🔌 ESP Manager</h1>
                 <div class="nav-links" id="navLinks">
+                    <button id="backupBtn" class="btn btn-info" style="display: none; margin-right: 0.5rem;" title="Exportar datos">💾 Backup</button>
                     <button id="logoutBtn" class="btn btn-logout" style="display: none;">Cerrar Sesión</button>
                 </div>
             </div>
@@ -91,6 +92,13 @@
                 <!-- ESPs List -->
                 <div class="esp-section">
                     <h3>Mis Dispositivos ESP</h3>
+                    <div class="esp-actions-toolbar">
+                        <button class="btn btn-info btn-small" onclick="exportDataAsJSON()" title="Descargar respaldo">📥 Exportar</button>
+                        <label class="btn btn-info btn-small" title="Importar respaldo">
+                            📤 Importar
+                            <input type="file" id="importFile" accept=".json" style="display: none;" onchange="importDataFromJSON(this.files[0])">
+                        </label>
+                    </div>
                     <div id="espsList" class="esps-list">
                         <p class="empty-message">No tienes ESPs registrados</p>
                     </div>
@@ -103,5 +111,6 @@
     <div id="alert" class="alert" style="display: none;"></div>
 
     <script src="js/main.js"></script>
+    <script src="js/backup.js"></script>
 </body>
 </html>

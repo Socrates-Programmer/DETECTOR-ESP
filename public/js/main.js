@@ -2,9 +2,56 @@
 let token = null;
 let userId = null;
 let currentUser = null;
+let isOnline = navigator.onLine;
 
-// API Base URL
-const API_URL = 'http://localhost:3000/api';
+// API Base URL - Detecta automáticamente el servidor
+const API_URL = window.location.origin + '/api';
+
+// Sistema de almacenamiento local
+const LocalStorage = {
+  // Guardar datos de usuario
+  saveUser: (user) => {
+    localStorage.setItem('currentUser', JSON.stringify(user));
+  },
+
+  // Obtener datos de usuario
+  getUser: () => {
+    const user = localStorage.getItem('currentUser');
+    return user ? JSON.parse(user) : null;
+  },
+
+  // Guardar ESPs
+  saveESPs: (esps) => {
+    localStorage.setItem('userESPs', JSON.stringify(esps));
+  },
+
+  // Obtener ESPs
+  getESPs: () => {
+    const esps = localStorage.getItem('userESPs');
+    return esps ? JSON.parse(esps) : [];
+  },
+
+  // Limpiar datos de sesión
+  clearSession: () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('userId');
+    localStorage.removeItem('currentUser');
+    localStorage.removeItem('userESPs');
+  }
+};
+
+// Detectar cambios de conexión
+window.addEventListener('online', () => {
+  isOnline = true;
+  showAlert('✓ Conexión recuperada', 'success');
+  console.log('🟢 Online');
+});
+
+window.addEventListener('offline', () => {
+  isOnline = false;
+  showAlert('⚠️ Sin conexión (modo offline)', 'info');
+  console.log('🔴 Offline');
+});
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -23,6 +70,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('registerFormElement').addEventListener('submit', handleRegister);
     document.getElementById('registerESPForm').addEventListener('submit', handleRegisterESP);
     document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+    
+    // Backup button
+    const backupBtn = document.getElementById('backupBtn');
+    if (backupBtn) {
+        backupBtn.addEventListener('click', exportDataAsJSON);
+    }
 });
 
 // Show Auth Section
@@ -30,6 +83,7 @@ function showAuthSection() {
     document.getElementById('authSection').style.display = 'flex';
     document.getElementById('dashboardSection').style.display = 'none';
     document.getElementById('logoutBtn').style.display = 'none';
+    document.getElementById('backupBtn').style.display = 'none';
 }
 
 // Show Dashboard
@@ -37,6 +91,11 @@ function showDashboard() {
     document.getElementById('authSection').style.display = 'none';
     document.getElementById('dashboardSection').style.display = 'block';
     document.getElementById('logoutBtn').style.display = 'block';
+    document.getElementById('backupBtn').style.display = 'inline-block';
+    
+    if (!isOnline) {
+        showAlert('⚠️ Modo offline activo - datos en caché', 'info');
+    }
 }
 
 // Toggle between login and register forms
@@ -135,7 +194,7 @@ async function handleRegister(e) {
 // Load Dashboard
 async function loadDashboard() {
     try {
-        // Get user info
+        // Intentar obtener datos del servidor
         const response = await fetch(`${API_URL}/auth/user`, {
             method: 'GET',
             headers: {
@@ -151,14 +210,33 @@ async function loadDashboard() {
         }
 
         currentUser = user;
+        LocalStorage.saveUser(user);
+        
         document.getElementById('usernameDisplay').textContent = user.username;
         document.getElementById('userEmailDisplay').textContent = user.email;
 
         showDashboard();
         loadESPs();
+        
     } catch (error) {
-        console.error('Error:', error);
-        handleLogout();
+        console.error('Error al cargar dashboard:', error);
+        
+        // Intentar cargar desde localStorage (offline)
+        const cachedUser = LocalStorage.getUser();
+        
+        if (cachedUser) {
+            console.log('📱 Usando datos en caché (offline)');
+            currentUser = cachedUser;
+            document.getElementById('usernameDisplay').textContent = cachedUser.username;
+            document.getElementById('userEmailDisplay').textContent = cachedUser.email + ' (sin conexión)';
+            
+            showDashboard();
+            loadESPs(); // Cargará desde localStorage
+            showAlert('⚠️ Modo sin conexión - datos en caché', 'info');
+        } else {
+            // No hay datos en caché, logout
+            handleLogout();
+        }
     }
 }
 
@@ -196,6 +274,7 @@ async function handleRegisterESP(e) {
 }
 
 // Load ESPs
+// Load ESPs
 async function loadESPs() {
     try {
         const response = await fetch(`${API_URL}/esp/my-esps`, {
@@ -209,34 +288,51 @@ async function loadESPs() {
         const esps = await response.json();
 
         if (!response.ok) {
-            console.error('Error al cargar ESPs');
-            return;
+            throw new Error('Error al cargar ESPs');
         }
 
-        const espsList = document.getElementById('espsList');
-
-        if (esps.length === 0) {
-            espsList.innerHTML = '<p class="empty-message">No tienes ESPs registrados</p>';
-            return;
-        }
-
-        espsList.innerHTML = esps.map(esp => `
-            <div class="esp-item">
-                <div class="esp-info">
-                    <h4>${esp.name}</h4>
-                    <p>Clave: <span class="esp-key">${esp.esp_key}</span></p>
-                    <p>Registrado: ${new Date(esp.registered_at).toLocaleDateString('es-ES')}</p>
-                </div>
-                <div class="esp-actions">
-                    <button class="btn btn-secondary" onclick="editESP(${esp.id}, '${esp.name}')">Editar</button>
-                    <button class="btn btn-danger" onclick="deleteESP(${esp.id})">Eliminar</button>
-                </div>
-            </div>
-        `).join('');
+        // Guardar en localStorage
+        LocalStorage.saveESPs(esps);
+        renderESPs(esps);
+        
     } catch (error) {
-        console.error('Error:', error);
-        showAlert('Error al cargar ESPs', 'error');
+        console.error('Error al cargar ESPs:', error);
+        
+        // Intentar cargar desde localStorage
+        const cachedESPs = LocalStorage.getESPs();
+        if (cachedESPs.length > 0) {
+            console.log('📱 Usando ESPs en caché (offline)');
+            renderESPs(cachedESPs);
+            showAlert('⚠️ ESPs en caché (sin conexión)', 'info');
+        } else {
+            const espsList = document.getElementById('espsList');
+            espsList.innerHTML = '<p class="empty-message">No tienes ESPs registrados</p>';
+        }
     }
+}
+
+// Renderizar lista de ESPs
+function renderESPs(esps) {
+    const espsList = document.getElementById('espsList');
+
+    if (esps.length === 0) {
+        espsList.innerHTML = '<p class="empty-message">No tienes ESPs registrados</p>';
+        return;
+    }
+
+    espsList.innerHTML = esps.map(esp => `
+        <div class="esp-item">
+            <div class="esp-info">
+                <h4>${esp.name}</h4>
+                <p>Clave: <span class="esp-key">${esp.esp_key}</span></p>
+                <p>Registrado: ${new Date(esp.registered_at).toLocaleDateString('es-ES')}</p>
+            </div>
+            <div class="esp-actions">
+                <button class="btn btn-secondary" onclick="editESP(${esp.id}, '${esp.name}')">Editar</button>
+                <button class="btn btn-danger" onclick="deleteESP(${esp.id})">Eliminar</button>
+            </div>
+        </div>
+    `).join('');
 }
 
 // Edit ESP
@@ -304,8 +400,9 @@ async function deleteESP(espId) {
 
 // Handle Logout
 function handleLogout() {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userId');
+    // Limpiar session storage
+    LocalStorage.clearSession();
+    
     token = null;
     userId = null;
     currentUser = null;
@@ -318,6 +415,10 @@ function handleLogout() {
     // Reset form display
     document.getElementById('loginForm').classList.add('active');
     document.getElementById('registerForm').classList.remove('active');
+
+    showAuthSection();
+    showAlert('¡Sesión cerrada!', 'success');
+}
 
     showAuthSection();
     showAlert('¡Sesión cerrada!', 'success');
