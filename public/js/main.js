@@ -76,6 +76,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (backupBtn) {
         backupBtn.addEventListener('click', exportDataAsJSON);
     }
+
+    // Notas form
+    const notasForm = document.getElementById('notasForm');
+    if (notasForm) {
+        notasForm.addEventListener('submit', handleAddNota);
+    }
 });
 
 // Show Auth Section
@@ -100,15 +106,28 @@ function showDashboard() {
 
 // Toggle between login and register forms
 function toggleForms() {
+    console.log('🔄 toggleForms ejecutada');
+    
     const loginForm = document.getElementById('loginForm');
     const registerForm = document.getElementById('registerForm');
 
-    loginForm.classList.toggle('active');
-    registerForm.classList.toggle('active');
+    console.log('loginForm:', loginForm);
+    console.log('registerForm:', registerForm);
+    
+    if (loginForm && registerForm) {
+        loginForm.classList.toggle('active');
+        registerForm.classList.toggle('active');
 
-    // Clear forms
-    document.getElementById('loginFormElement').reset();
-    document.getElementById('registerFormElement').reset();
+        console.log('✓ Clases toggleadas');
+        console.log('loginForm.active:', loginForm.classList.contains('active'));
+        console.log('registerForm.active:', registerForm.classList.contains('active'));
+
+        // Clear forms
+        document.getElementById('loginFormElement').reset();
+        document.getElementById('registerFormElement').reset();
+    } else {
+        console.error('❌ Error: No se encontraron los formularios');
+    }
 }
 
 // Handle Login
@@ -217,6 +236,7 @@ async function loadDashboard() {
 
         showDashboard();
         loadESPs();
+        loadNotas();
         
     } catch (error) {
         console.error('Error al cargar dashboard:', error);
@@ -232,6 +252,7 @@ async function loadDashboard() {
             
             showDashboard();
             loadESPs(); // Cargará desde localStorage
+            loadNotas(); // Cargar notas guardadas
             showAlert('⚠️ Modo sin conexión - datos en caché', 'info');
         } else {
             // No hay datos en caché, logout
@@ -420,8 +441,85 @@ function handleLogout() {
     showAlert('¡Sesión cerrada!', 'success');
 }
 
-    showAuthSection();
-    showAlert('¡Sesión cerrada!', 'success');
+// ==================== NOTAS ====================
+
+// Agregar nueva nota
+async function handleAddNota(e) {
+    e.preventDefault();
+
+    const notasInput = document.getElementById('notasInput');
+    const contenido = notasInput.value.trim();
+
+    if (!contenido) {
+        showAlert('Por favor escribe algo', 'error');
+        return;
+    }
+
+    try {
+        const nota = {
+            id: Date.now(),
+            contenido: contenido,
+            timestamp: new Date().toISOString(),
+            user_id: userId
+        };
+
+        // Guardar en localStorage
+        let notas = JSON.parse(localStorage.getItem('userNotas')) || [];
+        notas.unshift(nota); // Agregar al inicio
+        localStorage.setItem('userNotas', JSON.stringify(notas));
+
+        // Limpiar input
+        notasInput.value = '';
+        notasInput.focus();
+
+        showAlert('✓ Nota guardada correctamente', 'success');
+        loadNotas();
+    } catch (error) {
+        console.error('Error al guardar nota:', error);
+        showAlert('Error al guardar la nota', 'error');
+    }
+}
+
+// Cargar notas
+function loadNotas() {
+    try {
+        const notas = JSON.parse(localStorage.getItem('userNotas')) || [];
+        const notasList = document.getElementById('notasList');
+
+        if (notas.length === 0) {
+            notasList.innerHTML = '<p class="empty-message">No hay notas guardadas</p>';
+            return;
+        }
+
+        notasList.innerHTML = notas.map(nota => `
+            <div class="nota-item">
+                <div class="nota-timestamp">📅 ${new Date(nota.timestamp).toLocaleString('es-ES')}</div>
+                <div class="nota-content">${nota.contenido}</div>
+                <div class="nota-actions">
+                    <button class="btn btn-danger btn-small" onclick="deleteNota(${nota.id})">Eliminar</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Error al cargar notas:', error);
+    }
+}
+
+// Eliminar nota
+function deleteNota(notaId) {
+    if (!confirm('¿Estás seguro de que deseas eliminar esta nota?')) return;
+
+    try {
+        let notas = JSON.parse(localStorage.getItem('userNotas')) || [];
+        notas = notas.filter(nota => nota.id !== notaId);
+        localStorage.setItem('userNotas', JSON.stringify(notas));
+
+        showAlert('✓ Nota eliminada correctamente', 'success');
+        loadNotas();
+    } catch (error) {
+        console.error('Error al eliminar nota:', error);
+        showAlert('Error al eliminar la nota', 'error');
+    }
 }
 
 // Show Alert Message

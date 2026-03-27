@@ -36,7 +36,7 @@
                         </div>
                         <button type="submit" class="btn btn-primary">Iniciar Sesión</button>
                     </form>
-                    <p class="toggle-text">¿No tienes cuenta? <a href="#" onclick="toggleForms()">Regístrate aquí</a></p>
+                    <p class="toggle-text">¿No tienes cuenta? <a href="javascript:void(0)" onclick="toggleForms(); return false;">Regístrate aquí</a></p>
                 </div>
 
                 <!-- Register Form -->
@@ -57,7 +57,7 @@
                         </div>
                         <button type="submit" class="btn btn-primary">Registrarse</button>
                     </form>
-                    <p class="toggle-text">¿Ya tienes cuenta? <a href="#" onclick="toggleForms()">Inicia sesión aquí</a></p>
+                    <p class="toggle-text">¿Ya tienes cuenta? <a href="javascript:void(0)" onclick="toggleForms(); return false;">Inicia sesión aquí</a></p>
                 </div>
             </div>
         </div>
@@ -69,6 +69,23 @@
                 <div class="user-info">
                     <h2>Bienvenido, <span id="usernameDisplay">Usuario</span></h2>
                     <p id="userEmailDisplay"></p>
+                </div>
+
+                <!-- Notas Section -->
+                <div class="esp-section">
+                    <h3>📝 Mis Notas</h3>
+                    <div class="form-container">
+                        <form id="notasForm" class="form-box" style="display: block;">
+                            <div class="form-group">
+                                <label for="notasInput">Agregar Nota:</label>
+                                <textarea id="notasInput" placeholder="Escribe aquí tus notas..." rows="4" style="resize: vertical;"></textarea>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Guardar Nota</button>
+                        </form>
+                    </div>
+                    <div id="notasList" class="notas-list">
+                        <p class="empty-message">No hay notas guardadas</p>
+                    </div>
                 </div>
 
                 <!-- ESP Registration -->

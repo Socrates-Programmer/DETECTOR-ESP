@@ -121,6 +121,22 @@ body {
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
+.form-group textarea {
+    width: 100%;
+    padding: 0.75rem;
+    border: 2px solid #ddd;
+    border-radius: 5px;
+    font-size: 1rem;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    transition: border-color 0.3s;
+}
+
+.form-group textarea:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
 /* Buttons */
 .btn {
     padding: 0.75rem 1.5rem;
@@ -312,6 +328,40 @@ label.btn {
 
 label.btn input[type="file"] {
     display: none;
+}
+
+/* Notas List */
+.notas-list {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.nota-item {
+    background: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 8px;
+    border-left: 4px solid #2ecc71;
+    animation: slideIn 0.3s ease-in-out;
+    position: relative;
+}
+
+.nota-item .nota-content {
+    color: #333;
+    margin-bottom: 0.75rem;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+
+.nota-item .nota-timestamp {
+    color: #999;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+}
+
+.nota-item .nota-actions {
+    display: flex;
+    gap: 0.5rem;
 }
 
 .empty-message {
