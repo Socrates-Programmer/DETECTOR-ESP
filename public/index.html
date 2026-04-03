@@ -3,131 +3,197 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestor de Dispositivos ESP</title>
+    <title>KLAUS Link Hub</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <div class="container">
-        <!-- Navbar -->
-        <nav class="navbar" id="navbar">
-            <div class="nav-content">
-                <h1 class="logo">🔌 ESP Manager</h1>
-                <div class="nav-links" id="navLinks">
-                    <button id="backupBtn" class="btn btn-info" style="display: none; margin-right: 0.5rem;" title="Exportar datos">💾 Backup</button>
-                    <button id="logoutBtn" class="btn btn-logout" style="display: none;">Cerrar Sesión</button>
+    <div class="page-shell">
+        <header class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow">BLACKCUBE / KLAUS LINK HUB</p>
+                <h1>Vincula cada ESP32 a una sola cuenta y valida su key por USB.</h1>
+                <p class="hero-text">
+                    La web funciona como interfaz gráfica de KLAUS: detecta la identidad física del dispositivo,
+                    reserva esa key para una cuenta y deja que el propio ESP gestione la lógica segura.
+                </p>
+            </div>
+
+            <div class="hero-card">
+                <div class="hero-metric">
+                    <span class="metric-label">Modelo</span>
+                    <strong>Cuenta -> Key única -> ESP</strong>
+                </div>
+                <div class="hero-metric">
+                    <span class="metric-label">Qué guarda la web</span>
+                    <strong>Solo el vínculo entre usuario y key</strong>
+                </div>
+                <div class="hero-metric">
+                    <span class="metric-label">Qué guarda el ESP</span>
+                    <strong>Las cuentas y la lógica de acceso</strong>
                 </div>
             </div>
-        </nav>
+        </header>
 
-        <!-- Auth Section -->
-        <div id="authSection" class="section">
-            <div class="form-container">
-                <!-- Login Form -->
-                <div id="loginForm" class="form-box active">
-                    <h2>Iniciar Sesión</h2>
-                    <form id="loginFormElement">
-                        <div class="form-group">
-                            <label for="loginEmail">Correo Electrónico</label>
-                            <input type="email" id="loginEmail" placeholder="tu@email.com" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="loginPassword">Contraseña</label>
-                            <input type="password" id="loginPassword" placeholder="Contraseña" required>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Iniciar Sesión</button>
-                    </form>
-                    <p class="toggle-text">¿No tienes cuenta? <a href="javascript:void(0)" onclick="toggleForms(); return false;">Regístrate aquí</a></p>
+        <main class="workspace">
+            <section id="authSection" class="panel auth-panel">
+                <div class="panel-header">
+                    <p class="panel-kicker">Acceso</p>
+                    <h2>Entra a tu panel KLAUS</h2>
+                    <p class="panel-copy">
+                        Crea tu cuenta o inicia sesión para administrar únicamente las keys únicas autorizadas.
+                    </p>
                 </div>
 
-                <!-- Register Form -->
-                <div id="registerForm" class="form-box">
-                    <h2>Crear Cuenta</h2>
-                    <form id="registerFormElement">
-                        <div class="form-group">
-                            <label for="registerUsername">Nombre de Usuario</label>
-                            <input type="text" id="registerUsername" placeholder="Tu nombre de usuario" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="registerEmail">Correo Electrónico</label>
-                            <input type="email" id="registerEmail" placeholder="tu@email.com" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="registerPassword">Contraseña</label>
-                            <input type="password" id="registerPassword" placeholder="Mínimo 6 caracteres" required>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Registrarse</button>
-                    </form>
-                    <p class="toggle-text">¿Ya tienes cuenta? <a href="javascript:void(0)" onclick="toggleForms(); return false;">Inicia sesión aquí</a></p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Dashboard Section -->
-        <div id="dashboardSection" class="section" style="display: none;">
-            <div class="dashboard-container">
-                <!-- User Info -->
-                <div class="user-info">
-                    <h2>Bienvenido, <span id="usernameDisplay">Usuario</span></h2>
-                    <p id="userEmailDisplay"></p>
+                <div class="auth-switch">
+                    <button id="showLoginBtn" class="switch-btn is-active" type="button">Iniciar sesión</button>
+                    <button id="showRegisterBtn" class="switch-btn" type="button">Crear cuenta</button>
                 </div>
 
-                <!-- Notas Section -->
-                <div class="esp-section">
-                    <h3>📝 Mis Notas</h3>
-                    <div class="form-container">
-                        <form id="notasForm" class="form-box" style="display: block;">
-                            <div class="form-group">
-                                <label for="notasInput">Agregar Nota:</label>
-                                <textarea id="notasInput" placeholder="Escribe aquí tus notas..." rows="4" style="resize: vertical;"></textarea>
-                            </div>
-                            <button type="submit" class="btn btn-primary">Guardar Nota</button>
+                <form id="loginFormElement" class="auth-form is-active">
+                    <label class="input-group" for="loginEmail">
+                        <span>Correo electrónico</span>
+                        <input type="email" id="loginEmail" placeholder="tu@email.com" required>
+                    </label>
+
+                    <label class="input-group" for="loginPassword">
+                        <span>Contraseña</span>
+                        <input type="password" id="loginPassword" placeholder="Tu contraseña" required>
+                    </label>
+
+                    <button class="btn btn-primary" type="submit">Entrar al panel</button>
+                </form>
+
+                <form id="registerFormElement" class="auth-form">
+                    <label class="input-group" for="registerUsername">
+                        <span>Nombre de usuario</span>
+                        <input type="text" id="registerUsername" placeholder="Tu nombre" required>
+                    </label>
+
+                    <label class="input-group" for="registerEmail">
+                        <span>Correo electrónico</span>
+                        <input type="email" id="registerEmail" placeholder="tu@email.com" required>
+                    </label>
+
+                    <label class="input-group" for="registerPassword">
+                        <span>Contraseña</span>
+                        <input type="password" id="registerPassword" placeholder="Mínimo 6 caracteres" required>
+                    </label>
+
+                    <button class="btn btn-primary" type="submit">Crear cuenta</button>
+                </form>
+            </section>
+
+            <section id="dashboardSection" class="dashboard" hidden>
+                <div class="dashboard-grid">
+                    <article class="panel account-panel">
+                        <div class="panel-header">
+                            <p class="panel-kicker">Cuenta activa</p>
+                            <h2 id="usernameDisplay">Usuario</h2>
+                            <p id="userEmailDisplay" class="panel-copy"></p>
+                        </div>
+
+                        <div class="account-note">
+                            Cada key queda reservada para una sola cuenta. La web no almacena las cuentas internas
+                            del ESP, solo autoriza qué dispositivo pertenece a qué usuario.
+                        </div>
+
+                        <button id="logoutBtn" class="btn btn-secondary" type="button">Cerrar sesión</button>
+                    </article>
+
+                    <article class="panel usb-panel">
+                        <div class="panel-header">
+                            <p class="panel-kicker">Validación USB</p>
+                            <h2>Detecta la key física del ESP</h2>
+                            <p class="panel-copy">
+                                Conecta el dispositivo por USB y usa el puerto serial para leer su key única.
+                            </p>
+                        </div>
+
+                        <div id="serialSupport" class="status-chip status-chip-info">
+                            Comprobando compatibilidad serial...
+                        </div>
+
+                        <div class="action-row">
+                            <button id="connectUsbBtn" class="btn btn-primary" type="button">Conectar USB</button>
+                            <button id="disconnectUsbBtn" class="btn btn-secondary" type="button" disabled>Desconectar</button>
+                        </div>
+
+                        <div id="usbStatus" class="status-box status-box-info">
+                            Sin conexión USB.
+                        </div>
+
+                        <div class="detected-card">
+                            <span class="detected-label">Key detectada</span>
+                            <code id="detectedKeyValue">Sin detectar</code>
+                            <p id="detectedKeyHint" class="detected-hint">
+                                Cuando el ESP responda por serial, verás aquí su key única.
+                            </p>
+                        </div>
+
+                        <div class="action-row">
+                            <button id="refreshKeyBtn" class="btn btn-outline" type="button" disabled>Solicitar key</button>
+                            <button id="linkDetectedBtn" class="btn btn-primary" type="button" disabled>Vincular key detectada</button>
+                        </div>
+
+                        <pre id="serialLog" class="serial-log">Esperando actividad del puerto serial...</pre>
+                    </article>
+
+                    <article class="panel manual-panel">
+                        <div class="panel-header">
+                            <p class="panel-kicker">Vinculación manual</p>
+                            <h2>Guardar key por cuenta</h2>
+                            <p class="panel-copy">
+                                Si ya conoces la key del ESP, puedes vincularla manualmente a tu usuario.
+                            </p>
+                        </div>
+
+                        <form id="manualBindForm" class="stack">
+                            <label class="input-group" for="manualEspKey">
+                                <span>Key única del ESP</span>
+                                <input
+                                    type="text"
+                                    id="manualEspKey"
+                                    placeholder="ej. a1b2c3d4e5f6"
+                                    autocomplete="off"
+                                    maxlength="12"
+                                    required
+                                >
+                            </label>
+
+                            <button class="btn btn-primary" type="submit">Guardar key en mi cuenta</button>
                         </form>
-                    </div>
-                    <div id="notasList" class="notas-list">
-                        <p class="empty-message">No hay notas guardadas</p>
-                    </div>
-                </div>
 
-                <!-- ESP Registration -->
-                <div class="esp-section">
-                    <h3>Registrar Nuevo ESP</h3>
-                    <div class="form-container">
-                        <form id="registerESPForm" class="form-box">
-                            <div class="form-group">
-                                <label for="espKey">Clave Única del ESP</label>
-                                <input type="text" id="espKey" placeholder="Ej: ESP32-A1B2C3D4E5" required>
-                            </div>
-                            <div class="form-group">
-                                <label for="espName">Nombre del Dispositivo (Opcional)</label>
-                                <input type="text" id="espName" placeholder="Ej: Mi Sensor">
-                            </div>
-                            <button type="submit" class="btn btn-primary">Registrar ESP</button>
-                        </form>
-                    </div>
-                </div>
+                        <div id="manualKeyState" class="status-inline info">
+                            Introduce una key hexadecimal de 12 caracteres.
+                        </div>
+                    </article>
 
-                <!-- ESPs List -->
-                <div class="esp-section">
-                    <h3>Mis Dispositivos ESP</h3>
-                    <div class="esp-actions-toolbar">
-                        <button class="btn btn-info btn-small" onclick="exportDataAsJSON()" title="Descargar respaldo">📥 Exportar</button>
-                        <label class="btn btn-info btn-small" title="Importar respaldo">
-                            📤 Importar
-                            <input type="file" id="importFile" accept=".json" style="display: none;" onchange="importDataFromJSON(this.files[0])">
-                        </label>
-                    </div>
-                    <div id="espsList" class="esps-list">
-                        <p class="empty-message">No tienes ESPs registrados</p>
-                    </div>
+                    <article class="panel bindings-panel bindings-panel-wide">
+                        <div class="panel-header panel-header-inline">
+                            <div>
+                                <p class="panel-kicker">Dispositivos autorizados</p>
+                                <h2>Keys vinculadas</h2>
+                            </div>
+
+                            <button id="reloadBindingsBtn" class="btn btn-outline" type="button">Actualizar</button>
+                        </div>
+
+                        <p class="panel-copy">
+                            Aquí solo se guardan las keys permitidas para tu cuenta. Si eliminas una key,
+                            ese ESP deja de estar autorizado para esa cuenta.
+                        </p>
+
+                        <div id="bindingsList" class="bindings-list">
+                            <p class="empty-state">Todavía no hay keys vinculadas a esta cuenta.</p>
+                        </div>
+                    </article>
                 </div>
-            </div>
-        </div>
+            </section>
+        </main>
+
+        <div id="alert" class="alert" hidden></div>
     </div>
 
-    <!-- Alert Messages -->
-    <div id="alert" class="alert" style="display: none;"></div>
-
     <script src="js/main.js"></script>
-    <script src="js/backup.js"></script>
 </body>
 </html>

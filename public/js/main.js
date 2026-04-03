@@ -1,536 +1,728 @@
-// Global variables
-let token = null;
-let userId = null;
-let currentUser = null;
-let isOnline = navigator.onLine;
+const API_URL = `${window.location.origin}/api`;
+const DEVICE_KEY_PATTERN = /^[a-f0-9]{12}$/i;
+const SERIAL_BAUD_RATE = 115200;
 
-// API Base URL - Detecta automáticamente el servidor
-const API_URL = window.location.origin + '/api';
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
-// Sistema de almacenamiento local
-const LocalStorage = {
-  // Guardar datos de usuario
-  saveUser: (user) => {
-    localStorage.setItem('currentUser', JSON.stringify(user));
-  },
-
-  // Obtener datos de usuario
-  getUser: () => {
-    const user = localStorage.getItem('currentUser');
-    return user ? JSON.parse(user) : null;
-  },
-
-  // Guardar ESPs
-  saveESPs: (esps) => {
-    localStorage.setItem('userESPs', JSON.stringify(esps));
-  },
-
-  // Obtener ESPs
-  getESPs: () => {
-    const esps = localStorage.getItem('userESPs');
-    return esps ? JSON.parse(esps) : [];
-  },
-
-  // Limpiar datos de sesión
-  clearSession: () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userId');
-    localStorage.removeItem('currentUser');
-    localStorage.removeItem('userESPs');
-  }
+const state = {
+  token: localStorage.getItem('token'),
+  currentUser: null,
+  bindings: [],
+  port: null,
+  reader: null,
+  serialBuffer: '',
+  serialLines: [],
+  detectedKey: ''
 };
 
-// Detectar cambios de conexión
-window.addEventListener('online', () => {
-  isOnline = true;
-  showAlert('✓ Conexión recuperada', 'success');
-  console.log('🟢 Online');
-});
+const elements = {};
 
-window.addEventListener('offline', () => {
-  isOnline = false;
-  showAlert('⚠️ Sin conexión (modo offline)', 'info');
-  console.log('🔴 Offline');
-});
-
-// Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    // Check if user is logged in
-    token = localStorage.getItem('token');
-    userId = localStorage.getItem('userId');
+  cacheElements();
+  bindEvents();
+  setSerialCapabilityState();
+  showAuthMode('login');
 
-    if (token && userId) {
-        loadDashboard();
-    } else {
-        showAuthSection();
-    }
-
-    // Event listeners
-    document.getElementById('loginFormElement').addEventListener('submit', handleLogin);
-    document.getElementById('registerFormElement').addEventListener('submit', handleRegister);
-    document.getElementById('registerESPForm').addEventListener('submit', handleRegisterESP);
-    document.getElementById('logoutBtn').addEventListener('click', handleLogout);
-    
-    // Backup button
-    const backupBtn = document.getElementById('backupBtn');
-    if (backupBtn) {
-        backupBtn.addEventListener('click', exportDataAsJSON);
-    }
-
-    // Notas form
-    const notasForm = document.getElementById('notasForm');
-    if (notasForm) {
-        notasForm.addEventListener('submit', handleAddNota);
-    }
+  if (state.token) {
+    void loadDashboard();
+  } else {
+    showLoggedOutView();
+  }
 });
 
-// Show Auth Section
-function showAuthSection() {
-    document.getElementById('authSection').style.display = 'flex';
-    document.getElementById('dashboardSection').style.display = 'none';
-    document.getElementById('logoutBtn').style.display = 'none';
-    document.getElementById('backupBtn').style.display = 'none';
+function cacheElements() {
+  elements.authSection = document.getElementById('authSection');
+  elements.dashboardSection = document.getElementById('dashboardSection');
+  elements.showLoginBtn = document.getElementById('showLoginBtn');
+  elements.showRegisterBtn = document.getElementById('showRegisterBtn');
+  elements.loginForm = document.getElementById('loginFormElement');
+  elements.registerForm = document.getElementById('registerFormElement');
+  elements.manualBindForm = document.getElementById('manualBindForm');
+  elements.logoutBtn = document.getElementById('logoutBtn');
+  elements.reloadBindingsBtn = document.getElementById('reloadBindingsBtn');
+  elements.connectUsbBtn = document.getElementById('connectUsbBtn');
+  elements.disconnectUsbBtn = document.getElementById('disconnectUsbBtn');
+  elements.refreshKeyBtn = document.getElementById('refreshKeyBtn');
+  elements.linkDetectedBtn = document.getElementById('linkDetectedBtn');
+  elements.serialSupport = document.getElementById('serialSupport');
+  elements.usbStatus = document.getElementById('usbStatus');
+  elements.serialLog = document.getElementById('serialLog');
+  elements.detectedKeyValue = document.getElementById('detectedKeyValue');
+  elements.detectedKeyHint = document.getElementById('detectedKeyHint');
+  elements.manualEspKey = document.getElementById('manualEspKey');
+  elements.manualKeyState = document.getElementById('manualKeyState');
+  elements.bindingsList = document.getElementById('bindingsList');
+  elements.usernameDisplay = document.getElementById('usernameDisplay');
+  elements.userEmailDisplay = document.getElementById('userEmailDisplay');
+  elements.alert = document.getElementById('alert');
 }
 
-// Show Dashboard
-function showDashboard() {
-    document.getElementById('authSection').style.display = 'none';
-    document.getElementById('dashboardSection').style.display = 'block';
-    document.getElementById('logoutBtn').style.display = 'block';
-    document.getElementById('backupBtn').style.display = 'inline-block';
-    
-    if (!isOnline) {
-        showAlert('⚠️ Modo offline activo - datos en caché', 'info');
-    }
+function bindEvents() {
+  elements.showLoginBtn.addEventListener('click', () => showAuthMode('login'));
+  elements.showRegisterBtn.addEventListener('click', () => showAuthMode('register'));
+  elements.loginForm.addEventListener('submit', handleLogin);
+  elements.registerForm.addEventListener('submit', handleRegister);
+  elements.manualBindForm.addEventListener('submit', handleManualBind);
+  elements.manualEspKey.addEventListener('input', handleManualKeyInput);
+  elements.logoutBtn.addEventListener('click', () => {
+    void handleLogout();
+  });
+  elements.reloadBindingsBtn.addEventListener('click', () => {
+    void loadBindings();
+  });
+  elements.connectUsbBtn.addEventListener('click', () => {
+    void connectUSB();
+  });
+  elements.disconnectUsbBtn.addEventListener('click', () => {
+    void disconnectUSB();
+  });
+  elements.refreshKeyBtn.addEventListener('click', () => {
+    void requestDeviceKey();
+  });
+  elements.linkDetectedBtn.addEventListener('click', () => {
+    void bindKeyToCurrentUser(state.detectedKey, 'usb');
+  });
+
+  if ('serial' in navigator && typeof navigator.serial.addEventListener === 'function') {
+    navigator.serial.addEventListener('disconnect', () => {
+      void handlePortDisconnected();
+    });
+  }
 }
 
-// Toggle between login and register forms
-function toggleForms() {
-    console.log('🔄 toggleForms ejecutada');
-    
-    const loginForm = document.getElementById('loginForm');
-    const registerForm = document.getElementById('registerForm');
-
-    console.log('loginForm:', loginForm);
-    console.log('registerForm:', registerForm);
-    
-    if (loginForm && registerForm) {
-        loginForm.classList.toggle('active');
-        registerForm.classList.toggle('active');
-
-        console.log('✓ Clases toggleadas');
-        console.log('loginForm.active:', loginForm.classList.contains('active'));
-        console.log('registerForm.active:', registerForm.classList.contains('active'));
-
-        // Clear forms
-        document.getElementById('loginFormElement').reset();
-        document.getElementById('registerFormElement').reset();
-    } else {
-        console.error('❌ Error: No se encontraron los formularios');
-    }
+function showAuthMode(mode) {
+  const isLogin = mode === 'login';
+  elements.showLoginBtn.classList.toggle('is-active', isLogin);
+  elements.showRegisterBtn.classList.toggle('is-active', !isLogin);
+  elements.loginForm.classList.toggle('is-active', isLogin);
+  elements.registerForm.classList.toggle('is-active', !isLogin);
 }
 
-// Handle Login
-async function handleLogin(e) {
-    e.preventDefault();
-
-    const email = document.getElementById('loginEmail').value;
-    const password = document.getElementById('loginPassword').value;
-
-    try {
-        const response = await fetch(`${API_URL}/auth/login`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ email, password })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            showAlert(data.error || 'Error en el login', 'error');
-            return;
-        }
-
-        // Save token and user info
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('userId', data.userId);
-        token = data.token;
-        userId = data.userId;
-
-        showAlert('¡Login exitoso!', 'success');
-        setTimeout(loadDashboard, 500);
-    } catch (error) {
-        console.error('Error:', error);
-        showAlert('Error de conexión', 'error');
-    }
+function showLoggedOutView() {
+  elements.authSection.hidden = false;
+  elements.dashboardSection.hidden = true;
 }
 
-// Handle Register
-async function handleRegister(e) {
-    e.preventDefault();
-
-    const username = document.getElementById('registerUsername').value;
-    const email = document.getElementById('registerEmail').value;
-    const password = document.getElementById('registerPassword').value;
-
-    if (password.length < 6) {
-        showAlert('La contraseña debe tener al menos 6 caracteres', 'error');
-        return;
-    }
-
-    try {
-        const response = await fetch(`${API_URL}/auth/register`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ username, email, password })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            showAlert(data.error || 'Error en el registro', 'error');
-            return;
-        }
-
-        // Save token and user info
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('userId', data.userId);
-        token = data.token;
-        userId = data.userId;
-
-        showAlert('¡Registro exitoso!', 'success');
-        setTimeout(loadDashboard, 500);
-    } catch (error) {
-        console.error('Error:', error);
-        showAlert('Error de conexión', 'error');
-    }
+function showDashboardView() {
+  elements.authSection.hidden = true;
+  elements.dashboardSection.hidden = false;
 }
 
-// Load Dashboard
+function setSerialCapabilityState() {
+  if (!('serial' in navigator)) {
+    elements.serialSupport.textContent = 'Tu navegador no soporta Web Serial. Usa Chrome o Edge.';
+    elements.serialSupport.className = 'status-chip status-box-error';
+    elements.connectUsbBtn.disabled = true;
+    setUSBStatus('Web Serial no está disponible en este navegador.', 'error');
+    return;
+  }
+
+  elements.serialSupport.textContent = 'Web Serial disponible. Puedes validar la key por USB.';
+  elements.serialSupport.className = 'status-chip status-chip-info';
+}
+
+function normalizeDeviceKey(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-fA-F0-9]/g, '')
+    .slice(0, 12)
+    .toLowerCase();
+}
+
+function isValidDeviceKey(value) {
+  return DEVICE_KEY_PATTERN.test(value);
+}
+
+function formatKey(value) {
+  return value ? value.toUpperCase() : 'Sin detectar';
+}
+
+function setUSBStatus(message, tone = 'info') {
+  elements.usbStatus.textContent = message;
+  elements.usbStatus.className = `status-box status-box-${tone}`;
+}
+
+function setManualKeyState(message, tone = 'info') {
+  elements.manualKeyState.textContent = message;
+  elements.manualKeyState.className = `status-inline ${tone}`;
+}
+
+function updateUSBButtons(connected) {
+  elements.connectUsbBtn.disabled = connected || !('serial' in navigator);
+  elements.disconnectUsbBtn.disabled = !connected;
+  elements.refreshKeyBtn.disabled = !connected;
+}
+
+function appendSerialLog(line) {
+  state.serialLines.push(line);
+  state.serialLines = state.serialLines.slice(-40);
+  elements.serialLog.textContent = state.serialLines.join('\n');
+  elements.serialLog.scrollTop = elements.serialLog.scrollHeight;
+}
+
+function resetSerialLog() {
+  state.serialLines = [];
+  elements.serialLog.textContent = 'Esperando actividad del puerto serial...';
+}
+
+async function apiFetch(path, options = {}) {
+  const request = {
+    method: options.method || 'GET',
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  };
+
+  if (options.authenticated && state.token) {
+    request.headers.Authorization = `Bearer ${state.token}`;
+  }
+
+  if (options.body) {
+    request.body = JSON.stringify(options.body);
+  }
+
+  const response = await fetch(`${API_URL}${path}`, request);
+  const data = await response.json().catch(() => ({}));
+  return { response, data };
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+
+  try {
+    const { response, data } = await apiFetch('/auth/login', {
+      method: 'POST',
+      body: { email, password }
+    });
+
+    if (!response.ok) {
+      showAlert(data.error || 'No se pudo iniciar sesión.', 'error');
+      return;
+    }
+
+    state.token = data.token;
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('userId', String(data.userId));
+
+    showAlert('Sesión iniciada correctamente.', 'success');
+    await loadDashboard();
+  } catch (error) {
+    showAlert('No fue posible conectarse al servidor.', 'error');
+  }
+}
+
+async function handleRegister(event) {
+  event.preventDefault();
+
+  const username = document.getElementById('registerUsername').value.trim();
+  const email = document.getElementById('registerEmail').value.trim();
+  const password = document.getElementById('registerPassword').value;
+
+  if (password.length < 6) {
+    showAlert('La contraseña debe tener al menos 6 caracteres.', 'error');
+    return;
+  }
+
+  try {
+    const { response, data } = await apiFetch('/auth/register', {
+      method: 'POST',
+      body: { username, email, password }
+    });
+
+    if (!response.ok) {
+      showAlert(data.error || 'No se pudo crear la cuenta.', 'error');
+      return;
+    }
+
+    state.token = data.token;
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('userId', String(data.userId));
+
+    showAlert('Cuenta creada correctamente.', 'success');
+    await loadDashboard();
+  } catch (error) {
+    showAlert('No fue posible conectarse al servidor.', 'error');
+  }
+}
+
 async function loadDashboard() {
-    try {
-        // Intentar obtener datos del servidor
-        const response = await fetch(`${API_URL}/auth/user`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
+  try {
+    const { response, data } = await apiFetch('/auth/user', {
+      authenticated: true
+    });
 
-        const user = await response.json();
-
-        if (!response.ok) {
-            throw new Error(user.error);
-        }
-
-        currentUser = user;
-        LocalStorage.saveUser(user);
-        
-        document.getElementById('usernameDisplay').textContent = user.username;
-        document.getElementById('userEmailDisplay').textContent = user.email;
-
-        showDashboard();
-        loadESPs();
-        loadNotas();
-        
-    } catch (error) {
-        console.error('Error al cargar dashboard:', error);
-        
-        // Intentar cargar desde localStorage (offline)
-        const cachedUser = LocalStorage.getUser();
-        
-        if (cachedUser) {
-            console.log('📱 Usando datos en caché (offline)');
-            currentUser = cachedUser;
-            document.getElementById('usernameDisplay').textContent = cachedUser.username;
-            document.getElementById('userEmailDisplay').textContent = cachedUser.email + ' (sin conexión)';
-            
-            showDashboard();
-            loadESPs(); // Cargará desde localStorage
-            loadNotas(); // Cargar notas guardadas
-            showAlert('⚠️ Modo sin conexión - datos en caché', 'info');
-        } else {
-            // No hay datos en caché, logout
-            handleLogout();
-        }
-    }
-}
-
-// Handle Register ESP
-async function handleRegisterESP(e) {
-    e.preventDefault();
-
-    const esp_key = document.getElementById('espKey').value;
-    const name = document.getElementById('espName').value;
-
-    try {
-        const response = await fetch(`${API_URL}/esp/register`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ esp_key, name: name || 'Mi ESP' })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            showAlert(data.error || 'Error al registrar ESP', 'error');
-            return;
-        }
-
-        showAlert('¡ESP registrado exitosamente!', 'success');
-        document.getElementById('registerESPForm').reset();
-        loadESPs();
-    } catch (error) {
-        console.error('Error:', error);
-        showAlert('Error de conexión', 'error');
-    }
-}
-
-// Load ESPs
-// Load ESPs
-async function loadESPs() {
-    try {
-        const response = await fetch(`${API_URL}/esp/my-esps`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        const esps = await response.json();
-
-        if (!response.ok) {
-            throw new Error('Error al cargar ESPs');
-        }
-
-        // Guardar en localStorage
-        LocalStorage.saveESPs(esps);
-        renderESPs(esps);
-        
-    } catch (error) {
-        console.error('Error al cargar ESPs:', error);
-        
-        // Intentar cargar desde localStorage
-        const cachedESPs = LocalStorage.getESPs();
-        if (cachedESPs.length > 0) {
-            console.log('📱 Usando ESPs en caché (offline)');
-            renderESPs(cachedESPs);
-            showAlert('⚠️ ESPs en caché (sin conexión)', 'info');
-        } else {
-            const espsList = document.getElementById('espsList');
-            espsList.innerHTML = '<p class="empty-message">No tienes ESPs registrados</p>';
-        }
-    }
-}
-
-// Renderizar lista de ESPs
-function renderESPs(esps) {
-    const espsList = document.getElementById('espsList');
-
-    if (esps.length === 0) {
-        espsList.innerHTML = '<p class="empty-message">No tienes ESPs registrados</p>';
-        return;
+    if (!response.ok) {
+      await handleLogout(false);
+      showAlert(data.error || 'Tu sesión ya no es válida.', 'error');
+      return;
     }
 
-    espsList.innerHTML = esps.map(esp => `
-        <div class="esp-item">
-            <div class="esp-info">
-                <h4>${esp.name}</h4>
-                <p>Clave: <span class="esp-key">${esp.esp_key}</span></p>
-                <p>Registrado: ${new Date(esp.registered_at).toLocaleDateString('es-ES')}</p>
-            </div>
-            <div class="esp-actions">
-                <button class="btn btn-secondary" onclick="editESP(${esp.id}, '${esp.name}')">Editar</button>
-                <button class="btn btn-danger" onclick="deleteESP(${esp.id})">Eliminar</button>
-            </div>
-        </div>
-    `).join('');
+    state.currentUser = data;
+    elements.usernameDisplay.textContent = data.username;
+    elements.userEmailDisplay.textContent = data.email;
+    showDashboardView();
+    setManualKeyState('Introduce una key hexadecimal de 12 caracteres.', 'info');
+    await loadBindings();
+  } catch (error) {
+    await handleLogout(false);
+    showAlert('No fue posible cargar tu sesión.', 'error');
+  }
 }
 
-// Edit ESP
-function editESP(espId, currentName) {
-    const newName = prompt('Nuevo nombre para el ESP:', currentName);
-    if (!newName || newName.trim() === '') return;
+async function loadBindings() {
+  try {
+    const { response, data } = await apiFetch('/esp/bindings', {
+      authenticated: true
+    });
 
-    updateESP(espId, newName);
-}
-
-// Update ESP
-async function updateESP(espId, newName) {
-    try {
-        const response = await fetch(`${API_URL}/esp/${espId}`, {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ name: newName })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            showAlert(data.error || 'Error al actualizar ESP', 'error');
-            return;
-        }
-
-        showAlert('¡ESP actualizado exitosamente!', 'success');
-        loadESPs();
-    } catch (error) {
-        console.error('Error:', error);
-        showAlert('Error de conexión', 'error');
-    }
-}
-
-// Delete ESP
-async function deleteESP(espId) {
-    if (!confirm('¿Estás seguro de que deseas eliminar este ESP?')) return;
-
-    try {
-        const response = await fetch(`${API_URL}/esp/${espId}`, {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            showAlert(data.error || 'Error al eliminar ESP', 'error');
-            return;
-        }
-
-        showAlert('¡ESP eliminado exitosamente!', 'success');
-        loadESPs();
-    } catch (error) {
-        console.error('Error:', error);
-        showAlert('Error de conexión', 'error');
-    }
-}
-
-// Handle Logout
-function handleLogout() {
-    // Limpiar session storage
-    LocalStorage.clearSession();
-    
-    token = null;
-    userId = null;
-    currentUser = null;
-
-    // Reset forms
-    document.getElementById('loginFormElement').reset();
-    document.getElementById('registerFormElement').reset();
-    document.getElementById('registerESPForm').reset();
-
-    // Reset form display
-    document.getElementById('loginForm').classList.add('active');
-    document.getElementById('registerForm').classList.remove('active');
-
-    showAuthSection();
-    showAlert('¡Sesión cerrada!', 'success');
-}
-
-// ==================== NOTAS ====================
-
-// Agregar nueva nota
-async function handleAddNota(e) {
-    e.preventDefault();
-
-    const notasInput = document.getElementById('notasInput');
-    const contenido = notasInput.value.trim();
-
-    if (!contenido) {
-        showAlert('Por favor escribe algo', 'error');
-        return;
+    if (!response.ok) {
+      showAlert(data.error || 'No se pudieron cargar las keys vinculadas.', 'error');
+      return;
     }
 
-    try {
-        const nota = {
-            id: Date.now(),
-            contenido: contenido,
-            timestamp: new Date().toISOString(),
-            user_id: userId
-        };
+    state.bindings = Array.isArray(data) ? data : [];
+    renderBindings();
 
-        // Guardar en localStorage
-        let notas = JSON.parse(localStorage.getItem('userNotas')) || [];
-        notas.unshift(nota); // Agregar al inicio
-        localStorage.setItem('userNotas', JSON.stringify(notas));
-
-        // Limpiar input
-        notasInput.value = '';
-        notasInput.focus();
-
-        showAlert('✓ Nota guardada correctamente', 'success');
-        loadNotas();
-    } catch (error) {
-        console.error('Error al guardar nota:', error);
-        showAlert('Error al guardar la nota', 'error');
+    if (state.detectedKey) {
+      await refreshDetectedKeyState(state.detectedKey);
     }
+  } catch (error) {
+    showAlert('No fue posible cargar las keys vinculadas.', 'error');
+  }
 }
 
-// Cargar notas
-function loadNotas() {
-    try {
-        const notas = JSON.parse(localStorage.getItem('userNotas')) || [];
-        const notasList = document.getElementById('notasList');
+function renderBindings() {
+  elements.bindingsList.replaceChildren();
 
-        if (notas.length === 0) {
-            notasList.innerHTML = '<p class="empty-message">No hay notas guardadas</p>';
-            return;
-        }
+  if (state.bindings.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.textContent = 'Todavía no hay keys vinculadas a esta cuenta.';
+    elements.bindingsList.appendChild(empty);
+    return;
+  }
 
-        notasList.innerHTML = notas.map(nota => `
-            <div class="nota-item">
-                <div class="nota-timestamp">📅 ${new Date(nota.timestamp).toLocaleString('es-ES')}</div>
-                <div class="nota-content">${nota.contenido}</div>
-                <div class="nota-actions">
-                    <button class="btn btn-danger btn-small" onclick="deleteNota(${nota.id})">Eliminar</button>
-                </div>
-            </div>
-        `).join('');
-    } catch (error) {
-        console.error('Error al cargar notas:', error);
+  state.bindings.forEach((binding) => {
+    const item = document.createElement('article');
+    item.className = 'binding-item';
+
+    const info = document.createElement('div');
+
+    const key = document.createElement('code');
+    key.className = 'binding-key';
+    key.textContent = formatKey(binding.esp_key);
+    info.appendChild(key);
+
+    const meta = document.createElement('p');
+    meta.className = 'binding-meta';
+    meta.textContent = `Vinculada el ${formatDate(binding.registered_at)}`;
+    info.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'binding-actions';
+
+    if (binding.esp_key === state.detectedKey) {
+      const badge = document.createElement('span');
+      badge.className = 'binding-badge success';
+      badge.textContent = 'Key detectada por USB';
+      actions.appendChild(badge);
     }
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'btn binding-delete';
+    deleteButton.textContent = 'Eliminar key';
+    deleteButton.addEventListener('click', () => {
+      void deleteBinding(binding.id);
+    });
+    actions.appendChild(deleteButton);
+
+    item.appendChild(info);
+    item.appendChild(actions);
+    elements.bindingsList.appendChild(item);
+  });
 }
 
-// Eliminar nota
-function deleteNota(notaId) {
-    if (!confirm('¿Estás seguro de que deseas eliminar esta nota?')) return;
+function formatDate(value) {
+  if (!value) {
+    return 'fecha desconocida';
+  }
+
+  return new Date(value).toLocaleString('es-ES', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+}
+
+async function deleteBinding(bindingId) {
+  const confirmed = window.confirm('¿Quieres eliminar esta key de tu cuenta?');
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const { response, data } = await apiFetch(`/esp/bindings/${bindingId}`, {
+      method: 'DELETE',
+      authenticated: true
+    });
+
+    if (!response.ok) {
+      showAlert(data.error || 'No fue posible eliminar la key.', 'error');
+      return;
+    }
+
+    showAlert('Key eliminada correctamente.', 'success');
+    await loadBindings();
+  } catch (error) {
+    showAlert('No fue posible eliminar la key.', 'error');
+  }
+}
+
+async function handleManualBind(event) {
+  event.preventDefault();
+
+  const key = normalizeDeviceKey(elements.manualEspKey.value);
+  elements.manualEspKey.value = key;
+
+  if (!isValidDeviceKey(key)) {
+    setManualKeyState('La key debe tener 12 caracteres hexadecimales.', 'error');
+    showAlert('La key del ESP no tiene un formato válido.', 'error');
+    return;
+  }
+
+  await bindKeyToCurrentUser(key, 'manual');
+}
+
+async function bindKeyToCurrentUser(key, source) {
+  if (!isValidDeviceKey(key)) {
+    showAlert('No hay una key válida para vincular.', 'error');
+    return;
+  }
+
+  try {
+    const { response, data } = await apiFetch('/esp/bind', {
+      method: 'POST',
+      authenticated: true,
+      body: {
+        esp_key: key,
+        source
+      }
+    });
+
+    if (!response.ok) {
+      showAlert(data.error || 'No fue posible guardar la key.', 'error');
+      return;
+    }
+
+    elements.manualEspKey.value = '';
+    setManualKeyState('Key vinculada a tu cuenta.', 'success');
+    showAlert(data.message || 'Key vinculada correctamente.', 'success');
+    await loadBindings();
+  } catch (error) {
+    showAlert('No fue posible guardar la key.', 'error');
+  }
+}
+
+function handleManualKeyInput(event) {
+  const normalized = normalizeDeviceKey(event.target.value);
+  event.target.value = normalized;
+
+  if (!normalized) {
+    setManualKeyState('Introduce una key hexadecimal de 12 caracteres.', 'info');
+    return;
+  }
+
+  if (!isValidDeviceKey(normalized)) {
+    setManualKeyState('La key todavía está incompleta o tiene un formato inválido.', 'warning');
+    return;
+  }
+
+  void refreshManualKeyState(normalized);
+}
+
+async function refreshManualKeyState(key) {
+  try {
+    const keyState = await fetchKeyState(key);
+    setManualKeyState(describeKeyState(keyState), keyStateTone(keyState));
+  } catch (error) {
+    setManualKeyState('No fue posible validar la key contra el servidor.', 'error');
+  }
+}
+
+async function refreshDetectedKeyState(key) {
+  try {
+    const keyState = await fetchKeyState(key);
+    const tone = keyStateTone(keyState);
+    elements.detectedKeyHint.textContent = describeKeyState(keyState);
+    elements.linkDetectedBtn.disabled = !keyState.available;
+    setUSBStatus(`Key detectada: ${formatKey(key)}. ${describeKeyState(keyState)}`, tone);
+  } catch (error) {
+    elements.detectedKeyHint.textContent = 'La key se detectó, pero no se pudo validar contra el servidor.';
+    elements.linkDetectedBtn.disabled = true;
+    setUSBStatus('La key se detectó, pero falló la validación con el servidor.', 'error');
+  }
+}
+
+async function fetchKeyState(key) {
+  const { response, data } = await apiFetch('/esp/check-key', {
+    method: 'POST',
+    authenticated: true,
+    body: { esp_key: key }
+  });
+
+  if (!response.ok) {
+    throw new Error(data.error || 'No fue posible validar la key.');
+  }
+
+  return data;
+}
+
+function describeKeyState(keyState) {
+  if (keyState.owned_by_current_user) {
+    return 'Esta key ya está vinculada a tu cuenta.';
+  }
+
+  if (keyState.available) {
+    return 'La key está libre y se puede vincular.';
+  }
+
+  return 'La key ya está reservada por otra cuenta.';
+}
+
+function keyStateTone(keyState) {
+  if (keyState.owned_by_current_user) {
+    return 'success';
+  }
+
+  if (keyState.available) {
+    return 'info';
+  }
+
+  return 'error';
+}
+
+async function connectUSB() {
+  if (!('serial' in navigator)) {
+    showAlert('Tu navegador no soporta Web Serial.', 'error');
+    return;
+  }
+
+  try {
+    const port = await navigator.serial.requestPort();
+    resetSerialLog();
+    state.serialBuffer = '';
+    await port.open({ baudRate: SERIAL_BAUD_RATE });
+    state.port = port;
+
+    updateUSBButtons(true);
+    appendSerialLog('[usb] Puerto abierto a 115200 baudios');
+    setUSBStatus('Puerto conectado. Solicitando key al ESP...', 'info');
+
+    void startSerialReader();
+
+    await wait(250);
+    await requestDeviceKey();
+  } catch (error) {
+    if (error && error.name === 'NotFoundError') {
+      return;
+    }
+
+    showAlert('No fue posible abrir el puerto USB.', 'error');
+    setUSBStatus('Fallo al abrir el puerto USB.', 'error');
+  }
+}
+
+async function startSerialReader() {
+  if (!state.port || !state.port.readable) {
+    return;
+  }
+
+  while (state.port && state.port.readable) {
+    const reader = state.port.readable.getReader();
+    state.reader = reader;
 
     try {
-        let notas = JSON.parse(localStorage.getItem('userNotas')) || [];
-        notas = notas.filter(nota => nota.id !== notaId);
-        localStorage.setItem('userNotas', JSON.stringify(notas));
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
 
-        showAlert('✓ Nota eliminada correctamente', 'success');
-        loadNotas();
+        if (value) {
+          processSerialChunk(decoder.decode(value, { stream: true }));
+        }
+      }
     } catch (error) {
-        console.error('Error al eliminar nota:', error);
-        showAlert('Error al eliminar la nota', 'error');
+      appendSerialLog('[usb] El puerto se desconectó o dejó de responder');
+    } finally {
+      if (state.reader === reader) {
+        state.reader = null;
+      }
+      reader.releaseLock();
     }
+
+    break;
+  }
 }
 
-// Show Alert Message
+function processSerialChunk(chunk) {
+  state.serialBuffer += chunk;
+  const lines = state.serialBuffer.split(/\r?\n/);
+  state.serialBuffer = lines.pop() || '';
+
+  lines.forEach((line) => {
+    const cleanLine = line.trim();
+    if (!cleanLine) {
+      return;
+    }
+
+    appendSerialLog(cleanLine);
+    const key = extractDeviceKey(cleanLine);
+    if (key) {
+      void applyDetectedKey(key);
+    }
+  });
+}
+
+function extractDeviceKey(line) {
+  const patterns = [
+    /DEVICE_ID:\s*([a-f0-9]{12})/i,
+    /KLAUS_KEY:\s*([a-f0-9]{12})/i,
+    /Device ID:\s*([a-f0-9]{12})/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = line.match(pattern);
+    if (match) {
+      return normalizeDeviceKey(match[1]);
+    }
+  }
+
+  return '';
+}
+
+async function applyDetectedKey(key) {
+  if (!isValidDeviceKey(key)) {
+    return;
+  }
+
+  state.detectedKey = key;
+  elements.detectedKeyValue.textContent = formatKey(key);
+  elements.detectedKeyHint.textContent = 'Key detectada por USB. Validando estado...';
+  elements.linkDetectedBtn.disabled = true;
+
+  await refreshDetectedKeyState(key);
+  renderBindings();
+}
+
+async function requestDeviceKey() {
+  if (!state.port) {
+    showAlert('Conecta primero un puerto USB.', 'error');
+    return;
+  }
+
+  try {
+    await sendSerialCommand('\r');
+    await wait(120);
+    await sendSerialCommand('ID\r');
+    appendSerialLog('[usb] Comando enviado: ID');
+    setUSBStatus('Solicitando key al ESP por serial...', 'info');
+  } catch (error) {
+    showAlert('No fue posible solicitar la key por serial.', 'error');
+    setUSBStatus('No fue posible escribir en el puerto serial.', 'error');
+  }
+}
+
+async function sendSerialCommand(text) {
+  if (!state.port || !state.port.writable) {
+    throw new Error('PORT_NOT_READY');
+  }
+
+  const writer = state.port.writable.getWriter();
+
+  try {
+    await writer.write(encoder.encode(text));
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+async function disconnectUSB(showNotice = true) {
+  if (state.reader) {
+    try {
+      await state.reader.cancel();
+    } catch (error) {
+      // Ignorado a propósito.
+    }
+  }
+
+  if (state.port) {
+    try {
+      await state.port.close();
+    } catch (error) {
+      // Ignorado a propósito.
+    }
+  }
+
+  state.port = null;
+  state.reader = null;
+  updateUSBButtons(false);
+  setUSBStatus('Sin conexión USB.', 'info');
+
+  if (showNotice) {
+    showAlert('Conexión USB cerrada.', 'info');
+  }
+}
+
+async function handlePortDisconnected() {
+  if (!state.port) {
+    return;
+  }
+
+  await disconnectUSB(false);
+  setUSBStatus('El puerto USB se desconectó.', 'error');
+}
+
+async function handleLogout(showMessage = true) {
+  await disconnectUSB(false);
+
+  state.token = null;
+  state.currentUser = null;
+  state.bindings = [];
+  state.detectedKey = '';
+  localStorage.removeItem('token');
+  localStorage.removeItem('userId');
+
+  elements.loginForm.reset();
+  elements.registerForm.reset();
+  elements.manualBindForm.reset();
+  elements.detectedKeyValue.textContent = 'Sin detectar';
+  elements.detectedKeyHint.textContent = 'Cuando el ESP responda por serial, verás aquí su key única.';
+  setManualKeyState('Introduce una key hexadecimal de 12 caracteres.', 'info');
+  renderBindings();
+  showLoggedOutView();
+  showAuthMode('login');
+
+  if (showMessage) {
+    showAlert('Sesión cerrada.', 'info');
+  }
+}
+
 function showAlert(message, type = 'info') {
-    const alert = document.getElementById('alert');
-    alert.textContent = message;
-    alert.className = `alert ${type}`;
-    alert.style.display = 'block';
+  elements.alert.textContent = message;
+  elements.alert.className = `alert ${type}`;
+  elements.alert.hidden = false;
 
-    // Auto-hide after 3 seconds
-    setTimeout(() => {
-        alert.style.display = 'none';
-    }, 3000);
+  window.clearTimeout(showAlert.timeoutId);
+  showAlert.timeoutId = window.setTimeout(() => {
+    elements.alert.hidden = true;
+  }, 3200);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }

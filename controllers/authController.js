@@ -1,11 +1,12 @@
 const bcrypt = require('bcryptjs');
-const jwt = require('jwt-simple');
 const db = require('../config/database');
-const { SECRET_KEY } = require('../middleware/auth');
+const { createUserToken } = require('../middleware/auth');
 
 // Registro de usuario
 exports.register = (req, res) => {
-  const { username, email, password } = req.body;
+  const username = String(req.body.username || '').trim();
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
 
   if (!username || !email || !password) {
     return res.status(400).json({ error: 'Faltan datos requeridos' });
@@ -36,7 +37,7 @@ exports.register = (req, res) => {
         return res.status(500).json({ error: 'Error al registrar usuario' });
       }
 
-      const token = jwt.encode({ userId: this.lastID }, SECRET_KEY);
+      const token = createUserToken(this.lastID);
       res.status(201).json({
         message: 'Usuario registrado exitosamente',
         token,
@@ -48,7 +49,8 @@ exports.register = (req, res) => {
 
 // Login
 exports.login = (req, res) => {
-  const { email, password } = req.body;
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email y contraseña requeridos' });
@@ -69,7 +71,7 @@ exports.login = (req, res) => {
       return res.status(401).json({ error: 'Email o contraseña incorrectos' });
     }
 
-    const token = jwt.encode({ userId: user.id }, SECRET_KEY);
+    const token = createUserToken(user.id);
     res.json({
       message: 'Login exitoso',
       token,

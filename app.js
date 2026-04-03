@@ -1,5 +1,6 @@
+require('dotenv').config();
+
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
 const path = require('path');
 
@@ -14,9 +15,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
+app.disable('x-powered-by');
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Servir archivos estáticos
 app.use(express.static(path.join(__dirname, 'public')));
@@ -27,16 +29,16 @@ app.use('/api/esp', espRoutes);
 
 // Ruta raíz - servir index.html
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Manejo de errores
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Error interno del servidor' });
+    console.error(err.stack);
+    res.status(500).json({ error: 'Error interno del servidor' });
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Servidor ejecutándose en http://localhost:${PORT}`);
-  console.log('Presiona Ctrl+C para detener el servidor\n');
+    console.log(`\n🚀 Servidor ejecutándose en http://localhost:${PORT}`);
+    console.log('Presiona Ctrl+C para detener el servidor\n');
 });
