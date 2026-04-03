@@ -6,160 +6,228 @@ const dataDir = path.join(__dirname, '../data');
 const dbPath = path.join(dataDir, 'data.db');
 const backupDir = path.join(dataDir, 'backups');
 
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  console.log('✓ Carpeta de datos creada:', dataDir);
-}
-
-if (!fs.existsSync(backupDir)) {
-  fs.mkdirSync(backupDir, { recursive: true });
-  console.log('✓ Carpeta de backups creada:', backupDir);
-}
-
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Error al conectar la base de datos:', err);
-  } else {
-    console.log('✓ Base de datos conectada:', dbPath);
-    db.run('PRAGMA journal_mode = WAL');
-    db.run('PRAGMA synchronous = FULL');
-    db.run('PRAGMA foreign_keys = ON');
-    db.run('PRAGMA cache_size = -64000');
+function ensureDirectory(dirPath, label) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+    console.log(`OK Carpeta de ${label} creada: ${dirPath}`);
   }
+}
+
+ensureDirectory(dataDir, 'datos');
+ensureDirectory(backupDir, 'backups');
+
+let db;
+
+const openPromise = new Promise((resolve, reject) => {
+  db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+      reject(err);
+      return;
+    }
+
+    console.log(`OK Base de datos conectada: ${dbPath}`);
+    resolve();
+  });
 });
 
-function ensureUsersTable() {
-  db.run(
-    `
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `,
-    (err) => {
-      if (!err) {
-        console.log('✓ Tabla "users" lista');
+function runAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function onRun(err) {
+      if (err) {
+        reject(err);
+        return;
       }
-    }
-  );
-}
 
-function ensureAuditTable() {
-  db.run(
-    `
-      CREATE TABLE IF NOT EXISTS audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        action TEXT NOT NULL,
-        table_name TEXT NOT NULL,
-        record_id INTEGER,
-        user_id INTEGER,
-        details TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `,
-    (err) => {
-      if (!err) {
-        console.log('✓ Tabla "audit_log" lista');
-      }
-    }
-  );
-}
-
-function createCurrentESPTable() {
-  db.run(
-    `
-      CREATE TABLE IF NOT EXISTS esps (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        esp_key TEXT UNIQUE NOT NULL,
-        user_id INTEGER NOT NULL,
-        registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      )
-    `,
-    (err) => {
-      if (!err) {
-        console.log('✓ Tabla "esps" lista');
-      }
-    }
-  );
-
-  db.run('CREATE INDEX IF NOT EXISTS idx_esps_user_id ON esps(user_id)');
-}
-
-function migrateLegacyESPTable() {
-  db.all('PRAGMA table_info(esps)', (err, columns) => {
-    if (err) {
-      console.error('Error al inspeccionar la tabla "esps":', err);
-      return;
-    }
-
-    const columnNames = columns.map((column) => column.name);
-    const hasCurrentShape =
-      columnNames.includes('id') &&
-      columnNames.includes('esp_key') &&
-      columnNames.includes('user_id') &&
-      columnNames.includes('registered_at') &&
-      !columnNames.includes('name') &&
-      !columnNames.includes('updated_at');
-
-    if (hasCurrentShape) {
-      createCurrentESPTable();
-      return;
-    }
-
-    db.serialize(() => {
-      console.log('↻ Migrando tabla "esps" al modelo de keys únicas...');
-
-      db.run('ALTER TABLE esps RENAME TO esps_legacy');
-      createCurrentESPTable();
-      db.run(
-        `
-          INSERT OR IGNORE INTO esps (id, esp_key, user_id, registered_at)
-          SELECT
-            id,
-            LOWER(TRIM(esp_key)),
-            user_id,
-            COALESCE(registered_at, CURRENT_TIMESTAMP)
-          FROM esps_legacy
-          WHERE esp_key IS NOT NULL AND user_id IS NOT NULL
-        `
-      );
-      db.run('DROP TABLE esps_legacy');
+      resolve(this);
     });
   });
 }
 
-function ensureESPTable() {
-  db.get(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'esps'",
-    (err, row) => {
+function getAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
       if (err) {
-        console.error('Error al verificar la tabla "esps":', err);
+        reject(err);
         return;
       }
 
-      if (!row) {
-        createCurrentESPTable();
+      resolve(row);
+    });
+  });
+}
+
+function allAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) {
+        reject(err);
         return;
       }
 
-      migrateLegacyESPTable();
-    }
+      resolve(rows || []);
+    });
+  });
+}
+
+async function configureDatabase() {
+  await runAsync('PRAGMA journal_mode = WAL');
+  await runAsync('PRAGMA synchronous = FULL');
+  await runAsync('PRAGMA foreign_keys = ON');
+  await runAsync('PRAGMA cache_size = -64000');
+}
+
+async function ensureUsersTable() {
+  await runAsync(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  console.log('OK Tabla "users" lista');
+}
+
+async function ensureAuditTable() {
+  await runAsync(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,
+      table_name TEXT NOT NULL,
+      record_id INTEGER,
+      user_id INTEGER,
+      details TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  console.log('OK Tabla "audit_log" lista');
+}
+
+async function createCurrentESPTable() {
+  await runAsync(`
+    CREATE TABLE IF NOT EXISTS esps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      esp_key TEXT UNIQUE NOT NULL,
+      user_id INTEGER NOT NULL,
+      registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  await runAsync('CREATE INDEX IF NOT EXISTS idx_esps_user_id ON esps(user_id)');
+  console.log('OK Tabla "esps" lista');
+}
+
+async function tableExists(tableName) {
+  const row = await getAsync(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+    [tableName]
+  );
+
+  return Boolean(row);
+}
+
+async function getTableColumns(tableName) {
+  const columns = await allAsync(`PRAGMA table_info(${tableName})`);
+  return columns.map((column) => column.name);
+}
+
+function hasCurrentESPShape(columnNames) {
+  return (
+    columnNames.includes('id') &&
+    columnNames.includes('esp_key') &&
+    columnNames.includes('user_id') &&
+    columnNames.includes('registered_at') &&
+    !columnNames.includes('name') &&
+    !columnNames.includes('updated_at')
   );
 }
 
-db.serialize(() => {
-  ensureUsersTable();
-  ensureAuditTable();
-  ensureESPTable();
-});
+async function importLegacyESPBindings(sourceTable) {
+  await runAsync(`
+    INSERT OR IGNORE INTO esps (id, esp_key, user_id, registered_at)
+    SELECT
+      id,
+      LOWER(TRIM(esp_key)),
+      user_id,
+      COALESCE(registered_at, CURRENT_TIMESTAMP)
+    FROM ${sourceTable}
+    WHERE esp_key IS NOT NULL AND user_id IS NOT NULL
+  `);
+}
+
+async function finalizeLegacyESPTable(sourceTable) {
+  await createCurrentESPTable();
+  await importLegacyESPBindings(sourceTable);
+  await runAsync(`DROP TABLE ${sourceTable}`);
+}
+
+async function migrateCurrentESPTable() {
+  console.log('Migrando tabla "esps" al modelo de keys unicas...');
+
+  await runAsync('BEGIN IMMEDIATE');
+
+  try {
+    await runAsync('ALTER TABLE esps RENAME TO esps_legacy');
+    await finalizeLegacyESPTable('esps_legacy');
+    await runAsync('COMMIT');
+  } catch (error) {
+    try {
+      await runAsync('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Error al revertir la migracion de "esps":', rollbackError);
+    }
+
+    throw error;
+  }
+
+  console.log('OK Migracion de "esps" completada');
+}
+
+async function resumeLegacyESPTable() {
+  console.log('Reanudando migracion pendiente de "esps"...');
+  await finalizeLegacyESPTable('esps_legacy');
+  console.log('OK Migracion pendiente de "esps" completada');
+}
+
+async function ensureESPTable() {
+  const hasESPTable = await tableExists('esps');
+  const hasLegacyTable = await tableExists('esps_legacy');
+
+  if (!hasESPTable && !hasLegacyTable) {
+    await createCurrentESPTable();
+    return;
+  }
+
+  if (!hasESPTable && hasLegacyTable) {
+    await resumeLegacyESPTable();
+    return;
+  }
+
+  const columnNames = await getTableColumns('esps');
+
+  if (!hasCurrentESPShape(columnNames)) {
+    await migrateCurrentESPTable();
+    return;
+  }
+
+  await createCurrentESPTable();
+
+  if (hasLegacyTable) {
+    await resumeLegacyESPTable();
+  }
+}
 
 function createBackup() {
   try {
+    if (!fs.existsSync(dbPath)) {
+      return;
+    }
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const backupPath = path.join(backupDir, `backup-${timestamp}.db`);
 
@@ -169,7 +237,7 @@ function createBackup() {
     source.pipe(dest);
 
     source.on('end', () => {
-      console.log('✓ Backup creado:', backupPath);
+      console.log(`OK Backup creado: ${backupPath}`);
 
       const backups = fs.readdirSync(backupDir).sort().reverse();
       if (backups.length > 5) {
@@ -179,27 +247,46 @@ function createBackup() {
       }
     });
 
-    source.on('error', (err) => {
-      console.error('Error al crear backup:', err);
+    source.on('error', (error) => {
+      console.error('Error al crear backup:', error);
     });
-  } catch (err) {
-    console.error('Error en createBackup:', err);
+  } catch (error) {
+    console.error('Error en createBackup:', error);
   }
 }
 
-setInterval(createBackup, 15 * 60 * 1000);
-createBackup();
+async function initializeDatabase() {
+  await openPromise;
+  await configureDatabase();
+  await ensureUsersTable();
+  await ensureAuditTable();
+  await ensureESPTable();
 
-process.on('SIGINT', () => {
-  console.log('\n⏹️  Guardando datos y cerrando...');
+  createBackup();
+  setInterval(createBackup, 15 * 60 * 1000);
+}
+
+const ready = initializeDatabase().catch((error) => {
+  console.error('Error al inicializar la base de datos:', error);
+  throw error;
+});
+
+function closeDatabase(signalName) {
+  console.log(`\nCerrando base de datos (${signalName})...`);
   db.close((err) => {
     if (err) {
       console.error('Error al cerrar la BD:', err);
     } else {
-      console.log('✓ Base de datos cerrada correctamente');
+      console.log('OK Base de datos cerrada correctamente');
     }
-    process.exit(0);
+
+    process.exit(err ? 1 : 0);
   });
-});
+}
+
+process.on('SIGINT', () => closeDatabase('SIGINT'));
+process.on('SIGTERM', () => closeDatabase('SIGTERM'));
+
+db.ready = ready;
 
 module.exports = db;
