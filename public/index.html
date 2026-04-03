@@ -3,33 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KLAUS Link Hub</title>
+    <title>KLAUS Device Console</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
     <div class="page-shell">
         <header class="hero">
             <div class="hero-copy">
-                <p class="eyebrow">BLACKCUBE / KLAUS LINK HUB</p>
-                <h1>Vincula cada ESP32 a una sola cuenta y valida su key por USB.</h1>
+                <p class="eyebrow">BLACKCUBE / KLAUS DEVICE CONSOLE</p>
+                <h1>Tu cuenta reserva la key del ESP. El ESP guarda y gobierna las cuentas.</h1>
                 <p class="hero-text">
-                    La web funciona como interfaz gráfica de KLAUS: detecta la identidad física del dispositivo,
-                    reserva esa key para una cuenta y deja que el propio ESP gestione la lógica segura.
+                    Esta web ya no funciona como gestor de cuentas en la nube. Solo vincula la identidad
+                    fisica del ESP a una cuenta, y despues envia por USB la informacion que debe vivir
+                    cifrada dentro del dispositivo.
                 </p>
+
+                <div class="hero-badges">
+                    <span class="hero-badge">Offline first</span>
+                    <span class="hero-badge">Vault local en ESP32-C3</span>
+                    <span class="hero-badge">USB serial + BLE HID</span>
+                </div>
             </div>
 
             <div class="hero-card">
                 <div class="hero-metric">
-                    <span class="metric-label">Modelo</span>
-                    <strong>Cuenta -> Key única -> ESP</strong>
+                    <span class="metric-label">La web guarda</span>
+                    <strong>Solo la key unica autorizada</strong>
                 </div>
                 <div class="hero-metric">
-                    <span class="metric-label">Qué guarda la web</span>
-                    <strong>Solo el vínculo entre usuario y key</strong>
+                    <span class="metric-label">El ESP guarda</span>
+                    <strong>Servicios, usuarios, politicas y rotacion</strong>
                 </div>
                 <div class="hero-metric">
-                    <span class="metric-label">Qué guarda el ESP</span>
-                    <strong>Las cuentas y la lógica de acceso</strong>
+                    <span class="metric-label">Flujo seguro</span>
+                    <strong>Cuenta -> Key reservada -> Vault desbloqueado</strong>
                 </div>
             </div>
         </header>
@@ -38,29 +45,29 @@
             <section id="authSection" class="panel auth-panel">
                 <div class="panel-header">
                     <p class="panel-kicker">Acceso</p>
-                    <h2>Entra a tu panel KLAUS</h2>
+                    <h2>Entra a tu consola KLAUS</h2>
                     <p class="panel-copy">
-                        Crea tu cuenta o inicia sesión para administrar únicamente las keys únicas autorizadas.
+                        Inicia sesion para reservar keys de ESP y operar el vault local por USB.
                     </p>
                 </div>
 
                 <div class="auth-switch">
-                    <button id="showLoginBtn" class="switch-btn is-active" type="button">Iniciar sesión</button>
+                    <button id="showLoginBtn" class="switch-btn is-active" type="button">Iniciar sesion</button>
                     <button id="showRegisterBtn" class="switch-btn" type="button">Crear cuenta</button>
                 </div>
 
                 <form id="loginFormElement" class="auth-form is-active">
                     <label class="input-group" for="loginEmail">
-                        <span>Correo electrónico</span>
+                        <span>Correo electronico</span>
                         <input type="email" id="loginEmail" placeholder="tu@email.com" required>
                     </label>
 
                     <label class="input-group" for="loginPassword">
-                        <span>Contraseña</span>
-                        <input type="password" id="loginPassword" placeholder="Tu contraseña" required>
+                        <span>Contrasena</span>
+                        <input type="password" id="loginPassword" placeholder="Tu contrasena" required>
                     </label>
 
-                    <button class="btn btn-primary" type="submit">Entrar al panel</button>
+                    <button class="btn btn-primary" type="submit">Entrar</button>
                 </form>
 
                 <form id="registerFormElement" class="auth-form">
@@ -70,13 +77,13 @@
                     </label>
 
                     <label class="input-group" for="registerEmail">
-                        <span>Correo electrónico</span>
+                        <span>Correo electronico</span>
                         <input type="email" id="registerEmail" placeholder="tu@email.com" required>
                     </label>
 
                     <label class="input-group" for="registerPassword">
-                        <span>Contraseña</span>
-                        <input type="password" id="registerPassword" placeholder="Mínimo 6 caracteres" required>
+                        <span>Contrasena</span>
+                        <input type="password" id="registerPassword" placeholder="Minimo 6 caracteres" required>
                     </label>
 
                     <button class="btn btn-primary" type="submit">Crear cuenta</button>
@@ -92,20 +99,21 @@
                             <p id="userEmailDisplay" class="panel-copy"></p>
                         </div>
 
-                        <div class="account-note">
-                            Cada key queda reservada para una sola cuenta. La web no almacena las cuentas internas
-                            del ESP, solo autoriza qué dispositivo pertenece a qué usuario.
+                        <div class="note-block">
+                            Tu cuenta solo reserva la key del dispositivo. Ninguna cuenta interna del vault se
+                            almacena en el servidor.
                         </div>
 
-                        <button id="logoutBtn" class="btn btn-secondary" type="button">Cerrar sesión</button>
+                        <button id="logoutBtn" class="btn btn-secondary" type="button">Cerrar sesion</button>
                     </article>
 
                     <article class="panel usb-panel">
                         <div class="panel-header">
-                            <p class="panel-kicker">Validación USB</p>
-                            <h2>Detecta la key física del ESP</h2>
+                            <p class="panel-kicker">Conexion USB</p>
+                            <h2>Detecta el ESP y valida su identidad</h2>
                             <p class="panel-copy">
-                                Conecta el dispositivo por USB y usa el puerto serial para leer su key única.
+                                Conecta el ESP32-C3, abre el puerto serial y consulta su DEVICE_ID para comprobar
+                                que pertenece a tu cuenta.
                             </p>
                         </div>
 
@@ -116,19 +124,35 @@
                         <div class="action-row">
                             <button id="connectUsbBtn" class="btn btn-primary" type="button">Conectar USB</button>
                             <button id="disconnectUsbBtn" class="btn btn-secondary" type="button" disabled>Desconectar</button>
+                            <button id="refreshDeviceBtn" class="btn btn-outline" type="button" disabled>Actualizar ESP</button>
                         </div>
 
                         <div id="usbStatus" class="status-box status-box-info">
-                            Sin conexión USB.
+                            Sin conexion USB.
                         </div>
 
-                        <div class="detected-card">
-                            <span class="detected-label">Key detectada</span>
-                            <code id="detectedKeyValue">Sin detectar</code>
-                            <p id="detectedKeyHint" class="detected-hint">
-                                Cuando el ESP responda por serial, verás aquí su key única.
-                            </p>
+                        <div class="device-summary">
+                            <div class="summary-item">
+                                <span class="summary-label">Key detectada</span>
+                                <code id="detectedKeyValue">Sin detectar</code>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">Estado en servidor</span>
+                                <strong id="bindingStateValue">Sin validar</strong>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">Vault</span>
+                                <strong id="vaultStateValue">Sin leer</strong>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">Cuentas en ESP</span>
+                                <strong id="deviceAccountsCount">0</strong>
+                            </div>
                         </div>
+
+                        <p id="detectedKeyHint" class="panel-copy compact">
+                            Cuando el ESP responda por serial, aqui veras su key unica y el estado del vault.
+                        </p>
 
                         <div class="action-row">
                             <button id="refreshKeyBtn" class="btn btn-outline" type="button" disabled>Solicitar key</button>
@@ -138,18 +162,36 @@
                         <pre id="serialLog" class="serial-log">Esperando actividad del puerto serial...</pre>
                     </article>
 
+                    <article class="panel bindings-panel">
+                        <div class="panel-header panel-header-inline">
+                            <div>
+                                <p class="panel-kicker">Dispositivos autorizados</p>
+                                <h2>Keys reservadas</h2>
+                            </div>
+                            <button id="reloadBindingsBtn" class="btn btn-outline" type="button">Actualizar</button>
+                        </div>
+
+                        <p class="panel-copy">
+                            Si eliminas una key, ese ESP deja de estar autorizado para trabajar con esta cuenta.
+                        </p>
+
+                        <div id="bindingsList" class="bindings-list">
+                            <p class="empty-state">Todavia no hay keys vinculadas a esta cuenta.</p>
+                        </div>
+                    </article>
+
                     <article class="panel manual-panel">
                         <div class="panel-header">
-                            <p class="panel-kicker">Vinculación manual</p>
-                            <h2>Guardar key por cuenta</h2>
+                            <p class="panel-kicker">Reserva manual</p>
+                            <h2>Guardar una key en tu cuenta</h2>
                             <p class="panel-copy">
-                                Si ya conoces la key del ESP, puedes vincularla manualmente a tu usuario.
+                                Si ya conoces la key del dispositivo, puedes reservarla sin conectar el USB.
                             </p>
                         </div>
 
                         <form id="manualBindForm" class="stack">
                             <label class="input-group" for="manualEspKey">
-                                <span>Key única del ESP</span>
+                                <span>Key unica del ESP</span>
                                 <input
                                     type="text"
                                     id="manualEspKey"
@@ -168,24 +210,173 @@
                         </div>
                     </article>
 
-                    <article class="panel bindings-panel bindings-panel-wide">
+                    <article class="panel session-panel">
+                        <div class="panel-header">
+                            <p class="panel-kicker">Sesion del Vault</p>
+                            <h2>Prepara el ESP para recibir cuentas</h2>
+                            <p class="panel-copy">
+                                Los datos sensibles viajan directo al ESP por USB y no pasan por la base de datos.
+                            </p>
+                        </div>
+
+                        <div id="vaultStateNotice" class="status-box status-box-info">
+                            Conecta un ESP autorizado para consultar su vault.
+                        </div>
+
+                        <form id="vaultCreateForm" class="stack" hidden>
+                            <label class="input-group" for="vaultOwnerName">
+                                <span>Nombre del propietario</span>
+                                <input type="text" id="vaultOwnerName" placeholder="Ej. Marcos" autocomplete="off">
+                            </label>
+
+                            <label class="input-group" for="vaultPin">
+                                <span>PIN</span>
+                                <input type="password" id="vaultPin" placeholder="Minimo 4 caracteres" autocomplete="new-password">
+                            </label>
+
+                            <label class="input-group" for="vaultPhrase">
+                                <span>Frase secreta</span>
+                                <input type="password" id="vaultPhrase" placeholder="Minimo 6 caracteres" autocomplete="new-password">
+                            </label>
+
+                            <button class="btn btn-primary" type="submit">Crear vault en el ESP</button>
+                        </form>
+
+                        <form id="vaultUnlockForm" class="stack" hidden>
+                            <label class="input-group" for="unlockPin">
+                                <span>PIN</span>
+                                <input type="password" id="unlockPin" placeholder="PIN del dispositivo" autocomplete="current-password">
+                            </label>
+
+                            <label class="input-group" for="unlockPhrase">
+                                <span>Frase secreta</span>
+                                <input type="password" id="unlockPhrase" placeholder="Frase secreta" autocomplete="current-password">
+                            </label>
+
+                            <button class="btn btn-primary" type="submit">Desbloquear vault</button>
+                        </form>
+
+                        <div id="vaultUnlockedPanel" class="stack" hidden>
+                            <div class="note-block">
+                                El vault esta desbloqueado. Ya puedes listar, crear, rotar o borrar cuentas dentro del ESP.
+                            </div>
+                            <button id="lockVaultBtn" class="btn btn-secondary" type="button">Bloquear vault</button>
+                        </div>
+                    </article>
+
+                    <article id="accountsListPanel" class="panel accounts-list-panel accounts-panel-wide" hidden>
                         <div class="panel-header panel-header-inline">
                             <div>
-                                <p class="panel-kicker">Dispositivos autorizados</p>
-                                <h2>Keys vinculadas</h2>
+                                <p class="panel-kicker">Vault del ESP</p>
+                                <h2>Cuentas guardadas dentro del vault</h2>
+                            </div>
+                            <button id="refreshAccountsBtn" class="btn btn-outline" type="button" disabled>Leer cuentas del ESP</button>
+                        </div>
+
+                        <div id="deviceAccountsState" class="status-box status-box-info">
+                            Conecta un ESP, valida su key y desbloquea el vault para listar sus cuentas.
+                        </div>
+
+                        <div id="deviceAccountsList" class="device-accounts-list">
+                            <p class="empty-state">Todavia no hay cuentas cargadas en este ESP.</p>
+                        </div>
+                    </article>
+
+                    <article id="accountsPanel" class="panel accounts-panel accounts-panel-wide" hidden>
+                        <div class="panel-header">
+                            <p class="panel-kicker">Escritura en el Vault</p>
+                            <h2>Guardar nueva cuenta en el dispositivo</h2>
+                            <p class="panel-copy">
+                                Este formulario envia la informacion directo al ESP. La web no conserva estas cuentas.
+                            </p>
+                        </div>
+
+                        <div id="deviceGuardState" class="status-box status-box-info">
+                            Conecta un ESP, valida su key y desbloquea el vault para administrar cuentas.
+                        </div>
+
+                        <form id="deviceAccountForm" class="device-account-form">
+                            <label class="input-group" for="accountService">
+                                <span>Servicio</span>
+                                <select id="accountService" required>
+                                    <option value="google">Google</option>
+                                    <option value="github">GitHub</option>
+                                    <option value="microsoft">Microsoft</option>
+                                    <option value="spotify">Spotify</option>
+                                </select>
+                            </label>
+
+                            <label class="input-group" for="accountLabel">
+                                <span>Alias dentro del vault</span>
+                                <input type="text" id="accountLabel" placeholder="Ej. Google principal" autocomplete="off" required>
+                            </label>
+
+                            <label class="input-group" for="accountUsername">
+                                <span id="accountUsernameLabel">Correo de Google</span>
+                                <input type="text" id="accountUsername" placeholder="usuario@email.com" autocomplete="off" required>
+                            </label>
+
+                            <label class="input-group" for="accountAuthFlow">
+                                <span>Flujo de autenticacion</span>
+                                <input type="text" id="accountAuthFlow" readonly>
+                            </label>
+
+                            <label class="input-group" for="accountScopes">
+                                <span>Scopes o permisos</span>
+                                <input type="text" id="accountScopes" placeholder="openid email profile" autocomplete="off" required>
+                            </label>
+
+                            <label id="accountTenantGroup" class="input-group" for="accountTenant" hidden>
+                                <span>Tenant Microsoft</span>
+                                <input type="text" id="accountTenant" placeholder="common" autocomplete="off">
+                            </label>
+
+                            <label class="input-group" for="accountRotateHours">
+                                <span>Rotacion</span>
+                                <select id="accountRotateHours">
+                                    <option value="2">Cada 2 horas</option>
+                                    <option value="4">Cada 4 horas</option>
+                                    <option value="6">Cada 6 horas</option>
+                                    <option value="24">Cada 24 horas</option>
+                                    <option value="168" selected>Semanal</option>
+                                </select>
+                            </label>
+
+                            <label class="input-group" for="accountBaseLength">
+                                <span>Longitud base</span>
+                                <select id="accountBaseLength">
+                                    <option value="12">12</option>
+                                    <option value="16" selected>16</option>
+                                    <option value="24">24</option>
+                                    <option value="32">32</option>
+                                </select>
+                            </label>
+
+                            <label class="input-group" for="accountSecurityLevel">
+                                <span>Nivel de seguridad</span>
+                                <select id="accountSecurityLevel">
+                                    <option value="0">0</option>
+                                    <option value="1" selected>1</option>
+                                    <option value="2">2</option>
+                                </select>
+                            </label>
+
+                            <label class="check-group">
+                                <input type="checkbox" id="accountSymbols" checked>
+                                <span>Incluir simbolos</span>
+                            </label>
+
+                            <label class="check-group">
+                                <input type="checkbox" id="accountAvoidAmbiguous" checked>
+                                <span>Evitar caracteres ambiguos</span>
+                            </label>
+
+                            <div id="accountServiceHint" class="note-block">
+                                Google usara un flujo oficial para dispositivos con entrada limitada.
                             </div>
 
-                            <button id="reloadBindingsBtn" class="btn btn-outline" type="button">Actualizar</button>
-                        </div>
-
-                        <p class="panel-copy">
-                            Aquí solo se guardan las keys permitidas para tu cuenta. Si eliminas una key,
-                            ese ESP deja de estar autorizado para esa cuenta.
-                        </p>
-
-                        <div id="bindingsList" class="bindings-list">
-                            <p class="empty-state">Todavía no hay keys vinculadas a esta cuenta.</p>
-                        </div>
+                            <button class="btn btn-primary account-submit" type="submit">Guardar cuenta en el ESP</button>
+                        </form>
                     </article>
                 </div>
             </section>
