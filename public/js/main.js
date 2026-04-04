@@ -5,8 +5,29 @@ const KLAUS_PROTOCOL_PREFIX = 'KLAUS';
 const KLAUS_PROTOCOL_VERSION = '1';
 const VAULT_OPERATION_TIMEOUT_MS = 30000;
 const DEFAULT_OAUTH_POLL_INTERVAL_SECONDS = 5;
+const DEFAULT_AUTOFILL_DELAY_MS = 4000;
 
 const SERVICE_PROFILES = {
+  website: {
+    title: 'Sitio web',
+    usernameLabel: 'Usuario o correo',
+    usernamePlaceholder: 'usuario o correo',
+    usernameMode: 'text',
+    authFlow: 'local_autofill',
+    defaultScopes: 'autofill',
+    usesTenant: false,
+    defaultTenant: '',
+    hint: 'Autofill local por BLE.',
+    showScopes: false,
+    oauthCapable: false,
+    defaultPolicy: {
+      rotateHours: '168',
+      baseLength: '20',
+      level: '2',
+      symbols: '1',
+      avoidAmbiguous: '0'
+    }
+  },
   google: {
     title: 'Google',
     usernameLabel: 'Correo de Google',
@@ -17,6 +38,8 @@ const SERVICE_PROFILES = {
     usesTenant: false,
     defaultTenant: '',
     hint: 'Flujo oficial de Google.',
+    showScopes: true,
+    oauthCapable: true,
     defaultPolicy: {
       rotateHours: '168',
       baseLength: '16',
@@ -35,6 +58,8 @@ const SERVICE_PROFILES = {
     usesTenant: false,
     defaultTenant: '',
     hint: 'Flujo oficial de GitHub.',
+    showScopes: true,
+    oauthCapable: true,
     defaultPolicy: {
       rotateHours: '168',
       baseLength: '16',
@@ -53,6 +78,8 @@ const SERVICE_PROFILES = {
     usesTenant: true,
     defaultTenant: 'common',
     hint: 'Flujo oficial de Microsoft.',
+    showScopes: true,
+    oauthCapable: true,
     defaultPolicy: {
       rotateHours: '168',
       baseLength: '18',
@@ -71,6 +98,8 @@ const SERVICE_PROFILES = {
     usesTenant: false,
     defaultTenant: '',
     hint: 'Flujo oficial de Spotify.',
+    showScopes: true,
+    oauthCapable: true,
     defaultPolicy: {
       rotateHours: '168',
       baseLength: '16',
@@ -231,6 +260,7 @@ function cacheElements() {
   elements.accountUsernameLabel = document.getElementById('accountUsernameLabel');
   elements.accountUsername = document.getElementById('accountUsername');
   elements.accountAuthFlow = document.getElementById('accountAuthFlow');
+  elements.accountScopesGroup = document.getElementById('accountScopesGroup');
   elements.accountScopes = document.getElementById('accountScopes');
   elements.accountTenantGroup = document.getElementById('accountTenantGroup');
   elements.accountTenantMode = document.getElementById('accountTenantMode');
@@ -671,8 +701,8 @@ function getSelectedTenantValue() {
 }
 
 function syncAccountServiceProfile(forceDefaults = false) {
-  const serviceKey = normalizeServiceKey(elements.accountService.value || 'google');
-  const profile = getServiceProfile(serviceKey) || SERVICE_PROFILES.google;
+  const serviceKey = normalizeServiceKey(elements.accountService.value || 'website');
+  const profile = getServiceProfile(serviceKey) || SERVICE_PROFILES.website;
   const previousService = elements.deviceAccountForm.dataset.serviceKey || '';
   const serviceChanged = previousService !== serviceKey;
 
@@ -680,6 +710,7 @@ function syncAccountServiceProfile(forceDefaults = false) {
   elements.accountUsernameLabel.textContent = profile.usernameLabel;
   elements.accountUsername.placeholder = profile.usernamePlaceholder;
   elements.accountUsername.type = profile.usernameMode === 'email' ? 'email' : 'text';
+  elements.accountLabel.placeholder = serviceKey === 'website' ? 'Ej. Netflix principal' : `Ej. ${profile.title} principal`;
   elements.accountAuthFlow.value = profile.authFlow;
   elements.accountAuthFlow.readOnly = true;
   elements.accountScopes.placeholder = profile.defaultScopes;
@@ -688,6 +719,9 @@ function syncAccountServiceProfile(forceDefaults = false) {
     elements.accountScopes.value = profile.defaultScopes;
   }
 
+  if (elements.accountScopesGroup) {
+    elements.accountScopesGroup.hidden = profile.showScopes === false;
+  }
   elements.accountTenantGroup.hidden = !profile.usesTenant;
   if (profile.usesTenant) {
     let tenantValue = getSelectedTenantValue();
@@ -742,6 +776,9 @@ function validateDeviceAccountValues(values) {
     if (!isValidMicrosoftTenant(values.tenant)) {
       return 'El tenant de Microsoft no es valido.';
     }
+  }
+  if (values.service === 'website' && values.username.length < 2) {
+    return 'El sitio web necesita un usuario o correo valido.';
   }
   if (values.service === 'spotify' && values.username.length < 2) {
     return 'Spotify necesita un usuario o correo valido.';
@@ -1614,6 +1651,7 @@ function buildDeviceInfo(payload, base = null) {
     device_id: normalizeDeviceKey(source.device_id || previous.device_id || ''),
     console: source.console || previous.console || '',
     ble: parseFlag(source.ble, previous.ble),
+    autofill_ready: parseFlag(source.autofill_ready, previous.autofill_ready),
     vault_exists: parseFlag(source.vault_exists, previous.vault_exists),
     vault_unlocked: parseFlag(source.vault_unlocked, previous.vault_unlocked),
     total_accounts: parseInteger(source.accounts, previous.total_accounts || 0),
@@ -1656,12 +1694,16 @@ function protocolErrorMessage(frame) {
       return 'El ESP recibio un comando OAuth incompleto.';
     case 'invalid_token_payload':
       return 'El token OAuth no pudo guardarse en el ESP. Repite el login o vuelve a autorizar la cuenta.';
+    case 'invalid_delay':
+      return 'El retardo de autofill no es valido.';
     case 'oauth_session_not_found':
       return 'Esa cuenta todavia no tiene una sesion OAuth guardada en el ESP.';
     case 'rate_limited':
       return 'El ESP activo la proteccion por intentos fallidos.';
     case 'invalid_param':
       return 'Los datos enviados al ESP no son validos.';
+    case 'not_initialized':
+      return 'Autofill no esta listo. Empareja KLAUS como teclado BLE antes de usarlo.';
     case 'encode_failed':
       return 'El ESP no pudo serializar la respuesta.';
     default:
@@ -1972,7 +2014,12 @@ function syncVaultPanels() {
 
   elements.vaultUnlockedPanel.hidden = false;
   setVaultNotice('Vault desbloqueado.', 'success');
-  setDeviceGuardState('ESP listo.', 'success');
+  setDeviceGuardState(
+    state.deviceInfo.autofill_ready
+      ? 'ESP listo. Autofill BLE activo.'
+      : 'ESP listo. Empareja KLAUS por BLE para autofill.',
+    state.deviceInfo.autofill_ready ? 'success' : 'info'
+  );
   setDeviceAccountsState(
     state.deviceAccounts.length > 0
       ? 'Cuentas listas.'
@@ -2260,6 +2307,15 @@ function getOAuthProviderState(service) {
   return state.oauthProviders[normalizeServiceKey(service)] || null;
 }
 
+function accountSupportsOAuth(account) {
+  const profile = getServiceProfile(account?.service);
+  return Boolean(profile?.oauthCapable);
+}
+
+function accountSupportsAutofill(account) {
+  return String(account?.auth_flow || '').trim().toLowerCase() === 'local_autofill';
+}
+
 function isOAuthSessionActive(account) {
   if (!account?.oauth?.authorized) {
     return false;
@@ -2284,6 +2340,13 @@ function formatOAuthExpiry(epochSeconds) {
 }
 
 function describeOAuthAccountState(account) {
+  if (!accountSupportsOAuth(account)) {
+    return {
+      tone: 'info',
+      text: 'Cuenta local lista para autofill.'
+    };
+  }
+
   const provider = getOAuthProviderState(account.service);
   if (!provider?.configured) {
     return {
@@ -2829,7 +2892,7 @@ async function handleDeviceAccountSubmit(event) {
   syncAccountServiceProfile();
 
   const serviceKey = normalizeServiceKey(elements.accountService.value);
-  const profile = getServiceProfile(serviceKey) || SERVICE_PROFILES.google;
+  const profile = getServiceProfile(serviceKey) || SERVICE_PROFILES.website;
   const values = {
     service: serviceKey,
     label: elements.accountLabel.value.trim(),
@@ -2894,6 +2957,8 @@ function renderDeviceAccounts() {
     const provider = getOAuthProviderState(account.service);
     const oauthState = describeOAuthAccountState(account);
     const oauthActive = isOAuthSessionActive(account);
+    const supportsOAuth = accountSupportsOAuth(account);
+    const supportsAutofill = accountSupportsAutofill(account);
     const card = document.createElement('article');
     card.className = 'device-account-card';
 
@@ -2921,9 +2986,11 @@ function renderDeviceAccounts() {
 
     const oauthPill = document.createElement('span');
     oauthPill.className = `device-pill ${oauthState.tone}`;
-    oauthPill.textContent = account.oauth?.authorized
-      ? (oauthActive ? 'OAuth listo' : 'OAuth expirado')
-      : 'Sin login OAuth';
+    oauthPill.textContent = supportsOAuth
+      ? (account.oauth?.authorized
+        ? (oauthActive ? 'OAuth listo' : 'OAuth expirado')
+        : 'Sin login OAuth')
+      : 'Autofill local';
     header.appendChild(oauthPill);
 
     left.appendChild(header);
@@ -2962,18 +3029,35 @@ function renderDeviceAccounts() {
     const actions = document.createElement('div');
     actions.className = 'device-account-actions';
 
-    const loginButton = document.createElement('button');
-    loginButton.type = 'button';
-    loginButton.className = 'btn account-login-btn';
-    loginButton.textContent = account.oauth?.authorized ? 'Reautenticar' : 'Conectar cuenta';
-    loginButton.disabled = !provider?.configured;
-    loginButton.title = provider?.configured
-      ? `Ejecuta el script OAuth de ${account.service_name || account.service}.`
-      : `Configura ${account.service_name || account.service} en el servidor para habilitar este login.`;
-    loginButton.addEventListener('click', () => {
-      void startAccountOAuthLogin(account);
-    });
-    actions.appendChild(loginButton);
+    if (supportsOAuth) {
+      const loginButton = document.createElement('button');
+      loginButton.type = 'button';
+      loginButton.className = 'btn account-login-btn';
+      loginButton.textContent = account.oauth?.authorized ? 'Reautenticar' : 'Conectar cuenta';
+      loginButton.disabled = !provider?.configured;
+      loginButton.title = provider?.configured
+        ? `Ejecuta el script OAuth de ${account.service_name || account.service}.`
+        : `Configura ${account.service_name || account.service} en el servidor para habilitar este login.`;
+      loginButton.addEventListener('click', () => {
+        void startAccountOAuthLogin(account);
+      });
+      actions.appendChild(loginButton);
+    }
+
+    if (supportsAutofill) {
+      const autofillButton = document.createElement('button');
+      autofillButton.type = 'button';
+      autofillButton.className = 'btn account-autofill-btn';
+      autofillButton.textContent = 'Autofill';
+      autofillButton.disabled = !state.deviceInfo?.autofill_ready;
+      autofillButton.title = state.deviceInfo?.autofill_ready
+        ? 'Envia usuario y password por BLE tras una breve espera.'
+        : 'Empareja KLAUS como teclado BLE para habilitar autofill.';
+      autofillButton.addEventListener('click', () => {
+        void autofillDeviceAccount(account, false);
+      });
+      actions.appendChild(autofillButton);
+    }
 
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
@@ -3002,6 +3086,42 @@ async function rotateDeviceAccount(accountId) {
     await refreshDeviceSnapshot();
   } catch (error) {
     showAlert(error.message || 'No fue posible rotar la cuenta.', 'error');
+  }
+}
+
+async function autofillDeviceAccount(account, sendEnter = false) {
+  if (!canManageDeviceAccounts()) {
+    showAlert('El ESP debe estar listo y desbloqueado para usar autofill.', 'error');
+    return;
+  }
+
+  if (!accountSupportsAutofill(account)) {
+    showAlert('Esta cuenta no usa autofill local.', 'error');
+    return;
+  }
+
+  if (!state.deviceInfo?.ble) {
+    showAlert('Este firmware no tiene teclado BLE disponible.', 'error');
+    return;
+  }
+
+  if (!state.deviceInfo?.autofill_ready) {
+    showAlert('Empareja KLAUS como teclado BLE antes de usar autofill.', 'error');
+    return;
+  }
+
+  const delayMs = DEFAULT_AUTOFILL_DELAY_MS;
+  setDeviceGuardState(`Autofill en ${Math.ceil(delayMs / 1000)} s. Cambia al formulario destino.`, 'info');
+
+  try {
+    await sendProtocolRequest(`ACCOUNT|AUTOFILL|${account.account_id}|${sendEnter ? 1 : 0}|${delayMs}`, {
+      timeoutMs: delayMs + 8000
+    });
+    showAlert(`Autofill enviado para ${account.label || account.username}.`, 'success');
+    setDeviceGuardState('Autofill enviado por BLE.', 'success');
+  } catch (error) {
+    setDeviceGuardState(error.message || 'No se pudo ejecutar autofill.', 'error');
+    showAlert(error.message || 'No se pudo ejecutar autofill.', 'error');
   }
 }
 

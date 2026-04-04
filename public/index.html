@@ -240,6 +240,7 @@
                             <label class="input-group" for="accountService">
                                 <span>Servicio</span>
                                 <select id="accountService" required>
+                                    <option value="website">Sitio web</option>
                                     <option value="google">Google</option>
                                     <option value="github">GitHub</option>
                                     <option value="microsoft">Microsoft</option>
@@ -262,7 +263,7 @@
                                 <input type="text" id="accountAuthFlow" readonly>
                             </label>
 
-                            <label class="input-group" for="accountScopes">
+                            <label id="accountScopesGroup" class="input-group" for="accountScopes">
                                 <span>Scopes</span>
                                 <input type="text" id="accountScopes" placeholder="openid email profile" autocomplete="off">
                             </label>
