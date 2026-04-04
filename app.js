@@ -8,6 +8,7 @@ const db = require('./config/database');
 
 const authRoutes = require('./routes/auth');
 const espRoutes = require('./routes/esp');
+const oauthRoutes = require('./routes/oauth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/esp', espRoutes);
+app.use('/api/oauth', oauthRoutes);
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

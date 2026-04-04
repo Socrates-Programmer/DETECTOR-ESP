@@ -4,6 +4,7 @@ const SERIAL_BAUD_RATE = 115200;
 const KLAUS_PROTOCOL_PREFIX = 'KLAUS';
 const KLAUS_PROTOCOL_VERSION = '1';
 const VAULT_OPERATION_TIMEOUT_MS = 30000;
+const DEFAULT_OAUTH_POLL_INTERVAL_SECONDS = 5;
 
 const SERVICE_PROFILES = {
   google: {
@@ -15,7 +16,14 @@ const SERVICE_PROFILES = {
     defaultScopes: 'openid email profile',
     usesTenant: false,
     defaultTenant: '',
-    hint: 'Google usara un flujo oficial para dispositivos con entrada limitada.'
+    hint: 'Flujo oficial de Google.',
+    defaultPolicy: {
+      rotateHours: '168',
+      baseLength: '16',
+      level: '1',
+      symbols: '1',
+      avoidAmbiguous: '1'
+    }
   },
   github: {
     title: 'GitHub',
@@ -26,7 +34,14 @@ const SERVICE_PROFILES = {
     defaultScopes: 'read:user user:email',
     usesTenant: false,
     defaultTenant: '',
-    hint: 'GitHub encaja bien con device flow y suele ser el flujo mas directo para KLAUS.'
+    hint: 'Flujo oficial de GitHub.',
+    defaultPolicy: {
+      rotateHours: '168',
+      baseLength: '16',
+      level: '1',
+      symbols: '1',
+      avoidAmbiguous: '1'
+    }
   },
   microsoft: {
     title: 'Microsoft',
@@ -37,7 +52,14 @@ const SERVICE_PROFILES = {
     defaultScopes: 'openid profile email offline_access User.Read',
     usesTenant: true,
     defaultTenant: 'common',
-    hint: 'Microsoft puede usar device code. Si no sabes el tenant, deja "common".'
+    hint: 'Flujo oficial de Microsoft.',
+    defaultPolicy: {
+      rotateHours: '168',
+      baseLength: '18',
+      level: '1',
+      symbols: '1',
+      avoidAmbiguous: '1'
+    }
   },
   spotify: {
     title: 'Spotify',
@@ -48,9 +70,61 @@ const SERVICE_PROFILES = {
     defaultScopes: 'user-read-email',
     usesTenant: false,
     defaultTenant: '',
-    hint: 'Spotify necesitara apoyo del navegador o PC durante el flujo de autorizacion.'
+    hint: 'Flujo oficial de Spotify.',
+    defaultPolicy: {
+      rotateHours: '168',
+      baseLength: '16',
+      level: '1',
+      symbols: '1',
+      avoidAmbiguous: '1'
+    }
   }
 };
+
+const FALLBACK_ACCOUNT_POLICY = {
+  rotateHours: '168',
+  baseLength: '16',
+  level: '1',
+  symbols: '1',
+  avoidAmbiguous: '1'
+};
+
+const OAUTH_PROVIDER_SETUP = {
+  google: {
+    title: 'Google',
+    fields: [
+      { key: 'client_id', label: 'Client ID', type: 'text', placeholder: 'Tu client ID de Google' },
+      { key: 'client_secret', label: 'Client Secret', type: 'password', placeholder: 'Tu client secret de Google' }
+    ],
+    note: 'Necesitas una app OAuth de Google preparada para device flow y permisos como openid, email y profile.'
+  },
+  github: {
+    title: 'GitHub',
+    fields: [
+      { key: 'client_id', label: 'Client ID', type: 'text', placeholder: 'Tu client ID de GitHub' }
+    ],
+    note: 'Necesitas una OAuth App de GitHub con device flow habilitado.'
+  },
+  microsoft: {
+    title: 'Microsoft',
+    fields: [
+      { key: 'client_id', label: 'Client ID', type: 'text', placeholder: 'Tu client ID de Microsoft' }
+    ],
+    note: 'Registra una app en Microsoft Entra y habilita device code flow.'
+  },
+  spotify: {
+    title: 'Spotify',
+    fields: [
+      { key: 'client_id', label: 'Client ID', type: 'text', placeholder: 'Tu client ID de Spotify' }
+    ],
+    note: 'Spotify usa popup con PKCE. Debes dar de alta la URL de callback que te mostramos abajo.'
+  }
+};
+
+const MICROSOFT_STANDARD_TENANTS = new Set(['common', 'organizations', 'consumers']);
+const ESP_USB_VENDOR_IDS = new Set([0x303A, 0x10C4, 0x1A86, 0x0403, 0x067B]);
+const SERIAL_PORT_HINT_STORAGE_KEY = 'klaus.serial-port-hint';
+const OAUTH_EMPTY_FIELD = '__KLAUS_EMPTY__';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -67,8 +141,12 @@ const state = {
   detectedKeyState: null,
   deviceInfo: null,
   deviceAccounts: [],
+  oauthProviders: {},
+  activeDeviceOAuth: null,
   requestSequence: 0,
-  pendingRequests: new Map()
+  pendingRequests: new Map(),
+  authorizedPortsCount: 0,
+  autoConnectInProgress: false
 };
 
 const elements = {};
@@ -86,6 +164,8 @@ document.addEventListener('DOMContentLoaded', () => {
   } else {
     showLoggedOutView();
   }
+
+  void refreshAuthorizedPortsState();
 });
 
 function cacheElements() {
@@ -99,6 +179,17 @@ function cacheElements() {
 
   elements.reloadBindingsBtn = document.getElementById('reloadBindingsBtn');
   elements.bindingsList = document.getElementById('bindingsList');
+  elements.oauthConfigPanel = document.getElementById('oauthConfigPanel');
+  elements.oauthSetupState = document.getElementById('oauthSetupState');
+  elements.oauthProvidersGrid = document.getElementById('oauthProvidersGrid');
+  elements.oauthDevicePanel = document.getElementById('oauthDevicePanel');
+  elements.oauthDeviceTitle = document.getElementById('oauthDeviceTitle');
+  elements.oauthDeviceMessage = document.getElementById('oauthDeviceMessage');
+  elements.oauthDeviceCode = document.getElementById('oauthDeviceCode');
+  elements.oauthDeviceState = document.getElementById('oauthDeviceState');
+  elements.oauthDeviceOpenBtn = document.getElementById('oauthDeviceOpenBtn');
+  elements.oauthDeviceCopyBtn = document.getElementById('oauthDeviceCopyBtn');
+  elements.oauthDeviceHideBtn = document.getElementById('oauthDeviceHideBtn');
 
   elements.manualBindForm = document.getElementById('manualBindForm');
   elements.manualEspKey = document.getElementById('manualEspKey');
@@ -108,6 +199,7 @@ function cacheElements() {
   elements.connectUsbBtn = document.getElementById('connectUsbBtn');
   elements.disconnectUsbBtn = document.getElementById('disconnectUsbBtn');
   elements.refreshDeviceBtn = document.getElementById('refreshDeviceBtn');
+  elements.usbQuickHint = document.getElementById('usbQuickHint');
   elements.refreshKeyBtn = document.getElementById('refreshKeyBtn');
   elements.linkDetectedBtn = document.getElementById('linkDetectedBtn');
   elements.usbStatus = document.getElementById('usbStatus');
@@ -141,13 +233,10 @@ function cacheElements() {
   elements.accountAuthFlow = document.getElementById('accountAuthFlow');
   elements.accountScopes = document.getElementById('accountScopes');
   elements.accountTenantGroup = document.getElementById('accountTenantGroup');
-  elements.accountTenant = document.getElementById('accountTenant');
+  elements.accountTenantMode = document.getElementById('accountTenantMode');
+  elements.accountCustomTenantGroup = document.getElementById('accountCustomTenantGroup');
+  elements.accountCustomTenant = document.getElementById('accountCustomTenant');
   elements.accountServiceHint = document.getElementById('accountServiceHint');
-  elements.accountRotateHours = document.getElementById('accountRotateHours');
-  elements.accountBaseLength = document.getElementById('accountBaseLength');
-  elements.accountSecurityLevel = document.getElementById('accountSecurityLevel');
-  elements.accountSymbols = document.getElementById('accountSymbols');
-  elements.accountAvoidAmbiguous = document.getElementById('accountAvoidAmbiguous');
   elements.deviceAccountsList = document.getElementById('deviceAccountsList');
   elements.accountsPanel = document.getElementById('accountsPanel');
 
@@ -169,8 +258,15 @@ function bindEvents() {
   elements.reloadBindingsBtn.addEventListener('click', () => {
     void loadBindings();
   });
-  elements.manualBindForm.addEventListener('submit', handleManualBind);
-  elements.manualEspKey.addEventListener('input', handleManualKeyInput);
+  elements.manualBindForm?.addEventListener('submit', handleManualBind);
+  elements.manualEspKey?.addEventListener('input', handleManualKeyInput);
+  elements.oauthDeviceOpenBtn?.addEventListener('click', handleOpenOAuthDevicePage);
+  elements.oauthDeviceCopyBtn?.addEventListener('click', () => {
+    void handleCopyOAuthDeviceCode();
+  });
+  elements.oauthDeviceHideBtn?.addEventListener('click', () => {
+    hideDeviceOAuthPanel(false);
+  });
 
   elements.connectUsbBtn.addEventListener('click', () => {
     void connectUSB();
@@ -200,9 +296,15 @@ function bindEvents() {
   elements.accountService.addEventListener('change', () => {
     syncAccountServiceProfile(true);
   });
+  elements.accountTenantMode?.addEventListener('change', () => {
+    syncTenantVisibility();
+  });
   elements.deviceAccountForm.addEventListener('submit', handleDeviceAccountSubmit);
 
   if ('serial' in navigator && typeof navigator.serial.addEventListener === 'function') {
+    navigator.serial.addEventListener('connect', () => {
+      void handlePortConnected();
+    });
     navigator.serial.addEventListener('disconnect', () => {
       void handlePortDisconnected();
     });
@@ -220,6 +322,7 @@ function showAuthMode(mode) {
 function showLoggedOutView() {
   elements.authSection.hidden = false;
   elements.dashboardSection.hidden = true;
+  hideDeviceOAuthPanel(true);
 }
 
 function showDashboardView() {
@@ -227,17 +330,142 @@ function showDashboardView() {
   elements.dashboardSection.hidden = false;
 }
 
+function setDeviceOAuthState(message, tone = 'info') {
+  if (!elements.oauthDeviceState) {
+    return;
+  }
+
+  elements.oauthDeviceState.textContent = message;
+  elements.oauthDeviceState.className = `status-box status-box-${tone === 'warning' ? 'info' : tone}`;
+}
+
+function showDeviceOAuthPanel({ serviceLabel, account, verificationUrl, userCode, message }) {
+  state.activeDeviceOAuth = {
+    serviceLabel,
+    accountLabel: account?.label || account?.username || '',
+    verificationUrl: verificationUrl || '',
+    userCode: String(userCode || '').trim(),
+    message: message || ''
+  };
+
+  elements.oauthDevicePanel.hidden = false;
+  elements.oauthDeviceTitle.textContent = `Conecta ${serviceLabel}`;
+  elements.oauthDeviceMessage.textContent = message
+    || `Abre la pagina oficial y pega este codigo para ${account?.label || account?.username || 'la cuenta'}.`;
+  elements.oauthDeviceCode.textContent = state.activeDeviceOAuth.userCode || 'Sin codigo';
+  elements.oauthDeviceOpenBtn.disabled = !verificationUrl;
+  setDeviceOAuthState(`Codigo listo para ${serviceLabel}.`, 'info');
+}
+
+function hideDeviceOAuthPanel(reset = false) {
+  if (elements.oauthDevicePanel) {
+    elements.oauthDevicePanel.hidden = true;
+  }
+
+  if (reset) {
+    state.activeDeviceOAuth = null;
+    if (elements.oauthDeviceTitle) {
+      elements.oauthDeviceTitle.textContent = 'Conecta la cuenta';
+    }
+    if (elements.oauthDeviceMessage) {
+      elements.oauthDeviceMessage.textContent = 'Copia el codigo y pegalo en la pagina oficial.';
+    }
+    if (elements.oauthDeviceCode) {
+      elements.oauthDeviceCode.textContent = '------';
+    }
+    if (elements.oauthDeviceOpenBtn) {
+      elements.oauthDeviceOpenBtn.disabled = false;
+    }
+    setDeviceOAuthState('Esperando autorizacion...', 'info');
+  }
+}
+
+function handleOpenOAuthDevicePage() {
+  const verificationUrl = state.activeDeviceOAuth?.verificationUrl || '';
+  if (!verificationUrl) {
+    showAlert('No hay una URL de autorizacion disponible para este flujo.', 'error');
+    return;
+  }
+
+  window.open(verificationUrl, '_blank', 'noopener');
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const temp = document.createElement('textarea');
+  temp.value = text;
+  temp.setAttribute('readonly', 'readonly');
+  temp.style.position = 'absolute';
+  temp.style.left = '-9999px';
+  document.body.appendChild(temp);
+  temp.select();
+  document.execCommand('copy');
+  document.body.removeChild(temp);
+}
+
+async function handleCopyOAuthDeviceCode() {
+  const code = state.activeDeviceOAuth?.userCode || '';
+  if (!code) {
+    showAlert('Todavia no hay un codigo para copiar.', 'error');
+    return;
+  }
+
+  try {
+    await copyTextToClipboard(code);
+    setDeviceOAuthState('Codigo copiado.', 'success');
+    showAlert('Codigo copiado al portapapeles.', 'success');
+  } catch (error) {
+    showAlert('No se pudo copiar el codigo. Copialo manualmente desde la pantalla.', 'error');
+  }
+}
+
 function setSerialCapabilityState() {
   if (!('serial' in navigator)) {
     elements.serialSupport.textContent = 'Tu navegador no soporta Web Serial. Usa Chrome o Edge.';
     elements.serialSupport.className = 'status-chip status-box-error';
+    if (elements.usbQuickHint) {
+      elements.usbQuickHint.textContent = 'Usa Chrome o Edge.';
+    }
     setUSBStatus('Web Serial no esta disponible en este navegador.', 'error');
     elements.connectUsbBtn.disabled = true;
     return;
   }
 
-  elements.serialSupport.textContent = 'Web Serial disponible. Puedes operar el vault del ESP por USB.';
+  renderSerialCapabilityState();
+}
+
+function renderSerialCapabilityState() {
+  if (!('serial' in navigator)) {
+    return;
+  }
+
+  if (state.port) {
+    elements.serialSupport.textContent = 'ESP conectado por Web Serial.';
+    if (elements.usbQuickHint) {
+      elements.usbQuickHint.textContent = 'Reconectaremos automaticamente cuando sea posible.';
+    }
+  } else if (state.authorizedPortsCount > 0) {
+    elements.serialSupport.textContent = state.authorizedPortsCount === 1
+      ? 'Web Serial disponible. Este navegador ya recuerda 1 ESP autorizado.'
+      : `Web Serial disponible. Este navegador ya recuerda ${state.authorizedPortsCount} puertos autorizados.`;
+    if (elements.usbQuickHint) {
+      elements.usbQuickHint.textContent = state.authorizedPortsCount === 1
+        ? 'Intentaremos reabrir el ESP automaticamente.'
+        : 'Si no reconectamos el puerto correcto, pulsa Conectar ESP.';
+    }
+  } else {
+    elements.serialSupport.textContent = 'Web Serial disponible. La primera vez debes autorizar el puerto del ESP.';
+    if (elements.usbQuickHint) {
+      elements.usbQuickHint.textContent = 'Tras la primera autorizacion, intentaremos reconectar automaticamente.';
+    }
+  }
+
   elements.serialSupport.className = 'status-chip status-chip-info';
+  updateUSBButtons(Boolean(state.port));
 }
 
 function normalizeDeviceKey(value) {
@@ -273,6 +501,9 @@ function setUSBStatus(message, tone = 'info') {
 }
 
 function setManualKeyState(message, tone = 'info') {
+  if (!elements.manualKeyState) {
+    return;
+  }
   elements.manualKeyState.textContent = message;
   elements.manualKeyState.className = `status-inline ${tone}`;
 }
@@ -301,6 +532,14 @@ function getServiceProfile(serviceKey) {
   return SERVICE_PROFILES[normalizeServiceKey(serviceKey)] || null;
 }
 
+function getHiddenAccountPolicy(serviceKey) {
+  const profile = getServiceProfile(serviceKey);
+  return {
+    ...FALLBACK_ACCOUNT_POLICY,
+    ...(profile?.defaultPolicy || {})
+  };
+}
+
 function formatServiceName(serviceKey) {
   const profile = getServiceProfile(serviceKey);
   return profile ? profile.title : (serviceKey || 'Servicio');
@@ -325,6 +564,112 @@ function isValidMicrosoftTenant(value) {
   return /^(common|organizations|consumers|[a-z0-9.-]{3,})$/i.test(String(value || '').trim());
 }
 
+function getPortInfo(port) {
+  if (!port || typeof port.getInfo !== 'function') {
+    return {};
+  }
+  return port.getInfo() || {};
+}
+
+function isLikelyEspPort(port) {
+  const info = getPortInfo(port);
+  return ESP_USB_VENDOR_IDS.has(info.usbVendorId || -1);
+}
+
+function loadPreferredPortHint() {
+  try {
+    const raw = localStorage.getItem(SERIAL_PORT_HINT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function savePreferredPortHint(port) {
+  const info = getPortInfo(port);
+  if (!info.usbVendorId && !info.usbProductId) {
+    return;
+  }
+  localStorage.setItem(SERIAL_PORT_HINT_STORAGE_KEY, JSON.stringify({
+    usbVendorId: info.usbVendorId || null,
+    usbProductId: info.usbProductId || null
+  }));
+}
+
+function portMatchesHint(port, hint) {
+  if (!hint) {
+    return false;
+  }
+  const info = getPortInfo(port);
+  return info.usbVendorId === hint.usbVendorId && info.usbProductId === hint.usbProductId;
+}
+
+function chooseAuthorizedPort(ports) {
+  if (!Array.isArray(ports) || ports.length === 0) {
+    return { port: null, ambiguous: false };
+  }
+
+  const hint = loadPreferredPortHint();
+  if (hint) {
+    const hintedPort = ports.find((port) => portMatchesHint(port, hint));
+    if (hintedPort) {
+      return { port: hintedPort, ambiguous: false };
+    }
+  }
+
+  const espLikePorts = ports.filter((port) => isLikelyEspPort(port));
+  if (espLikePorts.length === 1) {
+    return { port: espLikePorts[0], ambiguous: false };
+  }
+
+  if (ports.length === 1) {
+    return { port: ports[0], ambiguous: false };
+  }
+
+  return { port: null, ambiguous: true };
+}
+
+async function refreshAuthorizedPortsState() {
+  if (!('serial' in navigator)) {
+    state.authorizedPortsCount = 0;
+    return [];
+  }
+
+  try {
+    const ports = await navigator.serial.getPorts();
+    state.authorizedPortsCount = ports.length;
+    renderSerialCapabilityState();
+    return ports;
+  } catch (error) {
+    state.authorizedPortsCount = 0;
+    renderSerialCapabilityState();
+    return [];
+  }
+}
+
+function syncTenantVisibility() {
+  if (!elements.accountTenantMode || !elements.accountCustomTenantGroup) {
+    return;
+  }
+
+  const showCustomTenant = !elements.accountTenantGroup.hidden && elements.accountTenantMode.value === 'custom';
+  elements.accountCustomTenantGroup.hidden = !showCustomTenant;
+
+  if (!showCustomTenant && elements.accountCustomTenant) {
+    elements.accountCustomTenant.value = '';
+  }
+}
+
+function getSelectedTenantValue() {
+  if (!elements.accountTenantMode) {
+    return '';
+  }
+  if (elements.accountTenantMode.value === 'custom') {
+    return elements.accountCustomTenant?.value.trim() || '';
+  }
+  return elements.accountTenantMode.value.trim();
+}
+
 function syncAccountServiceProfile(forceDefaults = false) {
   const serviceKey = normalizeServiceKey(elements.accountService.value || 'google');
   const profile = getServiceProfile(serviceKey) || SERVICE_PROFILES.google;
@@ -337,6 +682,7 @@ function syncAccountServiceProfile(forceDefaults = false) {
   elements.accountUsername.type = profile.usernameMode === 'email' ? 'email' : 'text';
   elements.accountAuthFlow.value = profile.authFlow;
   elements.accountAuthFlow.readOnly = true;
+  elements.accountScopes.placeholder = profile.defaultScopes;
 
   if (forceDefaults || serviceChanged || !elements.accountScopes.value.trim()) {
     elements.accountScopes.value = profile.defaultScopes;
@@ -344,14 +690,27 @@ function syncAccountServiceProfile(forceDefaults = false) {
 
   elements.accountTenantGroup.hidden = !profile.usesTenant;
   if (profile.usesTenant) {
-    if (forceDefaults || serviceChanged || !elements.accountTenant.value.trim()) {
-      elements.accountTenant.value = profile.defaultTenant;
+    let tenantValue = getSelectedTenantValue();
+    if (forceDefaults || serviceChanged || !tenantValue) {
+      tenantValue = profile.defaultTenant || 'common';
+    }
+
+    if (MICROSOFT_STANDARD_TENANTS.has(tenantValue)) {
+      elements.accountTenantMode.value = tenantValue;
+      elements.accountCustomTenant.value = '';
+    } else {
+      elements.accountTenantMode.value = 'custom';
+      elements.accountCustomTenant.value = tenantValue;
     }
   } else {
-    elements.accountTenant.value = '';
+    elements.accountTenantMode.value = 'common';
+    elements.accountCustomTenant.value = '';
   }
 
-  elements.accountServiceHint.textContent = profile.hint;
+  syncTenantVisibility();
+  if (elements.accountServiceHint) {
+    elements.accountServiceHint.textContent = profile.hint;
+  }
   elements.deviceAccountForm.dataset.serviceKey = serviceKey;
 }
 
@@ -363,11 +722,11 @@ function validateDeviceAccountValues(values) {
   if (values.label.length < 2 || values.label.length > 64) {
     return 'El alias dentro del vault debe tener entre 2 y 64 caracteres.';
   }
-  if (values.username.length < 3 || values.username.length > 128) {
-    return 'El identificador principal debe tener entre 3 y 128 caracteres.';
+  if (!values.username || values.username.length > 128) {
+    return 'El identificador principal es obligatorio y no puede superar 128 caracteres.';
   }
-  if (values.scopes.length < 3 || values.scopes.length > 160) {
-    return 'Los scopes o permisos deben tener entre 3 y 160 caracteres.';
+  if (values.scopes.length > 160) {
+    return 'Los scopes o permisos no pueden superar 160 caracteres.';
   }
 
   if (values.service === 'google' && !isValidEmail(values.username)) {
@@ -392,7 +751,19 @@ function validateDeviceAccountValues(values) {
 }
 
 function updateUSBButtons(connected) {
-  elements.connectUsbBtn.disabled = connected || !('serial' in navigator);
+  const serialAvailable = 'serial' in navigator;
+  const reconnectReady = state.authorizedPortsCount > 0;
+  if (state.autoConnectInProgress) {
+    elements.connectUsbBtn.textContent = 'Reconectando...';
+  } else if (connected) {
+    elements.connectUsbBtn.textContent = 'ESP conectado';
+  } else if (reconnectReady) {
+    elements.connectUsbBtn.textContent = 'Reconectar ESP';
+  } else {
+    elements.connectUsbBtn.textContent = 'Conectar ESP';
+  }
+
+  elements.connectUsbBtn.disabled = connected || !serialAvailable || state.autoConnectInProgress;
   elements.disconnectUsbBtn.disabled = !connected;
   elements.refreshDeviceBtn.disabled = !connected;
   elements.refreshKeyBtn.disabled = !connected;
@@ -511,15 +882,227 @@ async function loadDashboard() {
     elements.usernameDisplay.textContent = data.username;
     elements.userEmailDisplay.textContent = data.email;
     showDashboardView();
-    setManualKeyState('Introduce una key hexadecimal de 12 caracteres.', 'info');
+    await loadOAuthProviders();
     await loadBindings();
 
-    if (state.port) {
+    if (!state.port) {
+      await tryAutoConnectAuthorizedPort();
+    } else {
       await refreshDeviceSnapshot();
     }
   } catch (error) {
     await handleLogout(false);
     showAlert('No fue posible cargar tu sesion.', 'error');
+  }
+}
+
+async function loadOAuthProviders() {
+  try {
+    const { response, data } = await apiFetch('/oauth/providers', {
+      authenticated: true
+    });
+
+    if (!response.ok) {
+      state.oauthProviders = {};
+      renderOAuthProviderSetup();
+      return;
+    }
+
+    state.oauthProviders = data || {};
+    renderOAuthProviderSetup();
+    renderDeviceAccounts();
+  } catch (error) {
+    state.oauthProviders = {};
+    renderOAuthProviderSetup();
+  }
+}
+
+function renderOAuthProviderSetup() {
+  if (!elements.oauthProvidersGrid || !elements.oauthSetupState) {
+    return;
+  }
+
+  elements.oauthProvidersGrid.replaceChildren();
+
+  const providers = Object.entries(OAUTH_PROVIDER_SETUP);
+  const configuredCount = providers.reduce((count, [service]) => (
+    count + (state.oauthProviders?.[service]?.configured ? 1 : 0)
+  ), 0);
+
+  if (configuredCount === 0) {
+    setOAuthSetupState('Ningun proveedor OAuth esta listo todavia. Configura al menos uno para habilitar el boton Conectar cuenta.', 'warning');
+  } else if (configuredCount === providers.length) {
+    setOAuthSetupState('Todos los proveedores OAuth disponibles ya quedaron listos.', 'success');
+  } else {
+    setOAuthSetupState(`Hay ${configuredCount} de ${providers.length} proveedores listos. Los botones solo se habilitan cuando cada servicio tenga sus credenciales.`, 'info');
+  }
+
+  providers.forEach(([service, setup]) => {
+    const provider = state.oauthProviders?.[service] || {};
+    const card = document.createElement('article');
+    card.className = 'oauth-provider-card';
+
+    const head = document.createElement('div');
+    head.className = 'oauth-provider-head';
+
+    const titleWrap = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = setup.title;
+    titleWrap.appendChild(title);
+
+    const meta = document.createElement('p');
+    meta.className = 'oauth-provider-meta';
+    meta.textContent = provider.configured
+      ? 'Proveedor listo para habilitar el login desde las cards.'
+      : 'Todavia faltan credenciales para habilitar el login.';
+    titleWrap.appendChild(meta);
+    head.appendChild(titleWrap);
+
+    const pill = document.createElement('span');
+    pill.className = `device-pill ${provider.configured ? 'success' : 'warning'}`;
+    pill.textContent = provider.configured ? 'Listo' : 'Pendiente';
+    head.appendChild(pill);
+    card.appendChild(head);
+
+    const note = document.createElement('div');
+    note.className = 'note-block';
+    note.textContent = setup.note;
+    card.appendChild(note);
+
+    const form = document.createElement('form');
+    form.className = 'oauth-provider-form';
+    form.dataset.service = service;
+
+    setup.fields.forEach((field) => {
+      const group = document.createElement('label');
+      group.className = 'input-group';
+      group.htmlFor = `oauth-${service}-${field.key}`;
+
+      const label = document.createElement('span');
+      label.textContent = field.label;
+
+      const source = provider?.field_sources?.[field.key];
+      if (source === 'env') {
+        const sourcePill = document.createElement('small');
+        sourcePill.className = 'oauth-source-pill';
+        sourcePill.textContent = 'desde entorno';
+        label.appendChild(sourcePill);
+      } else if (source === 'file') {
+        const sourcePill = document.createElement('small');
+        sourcePill.className = 'oauth-source-pill';
+        sourcePill.textContent = 'guardado en la app';
+        label.appendChild(sourcePill);
+      }
+
+      group.appendChild(label);
+
+      const input = document.createElement('input');
+      input.type = field.type;
+      input.id = `oauth-${service}-${field.key}`;
+      input.name = field.key;
+      input.autocomplete = 'off';
+      input.placeholder = field.placeholder;
+
+      if (field.key === 'client_id') {
+        input.value = provider.client_id || '';
+      } else if (field.key === 'client_secret' && provider.has_client_secret) {
+        input.placeholder = 'Ya hay un secret guardado. Escribe uno nuevo solo si quieres reemplazarlo.';
+      }
+
+      if (source === 'env') {
+        input.readOnly = true;
+      }
+
+      group.appendChild(input);
+      form.appendChild(group);
+    });
+
+    if (provider.callback_url) {
+      const callback = document.createElement('p');
+      callback.className = 'oauth-provider-meta';
+      callback.textContent = `Callback: ${provider.callback_url}`;
+      form.appendChild(callback);
+    }
+
+    const missing = document.createElement('div');
+    missing.className = `status-inline ${provider.configured ? 'success' : 'warning'}`;
+    missing.textContent = provider.configured
+      ? 'Configuracion valida. Ya puedes usar el boton Conectar cuenta para este servicio.'
+      : `Faltan: ${(provider.missing_fields || []).join(', ') || 'credenciales'}`;
+    form.appendChild(missing);
+
+    const actions = document.createElement('div');
+    actions.className = 'oauth-provider-actions';
+    const canEditAnyField = setup.fields.some((field) => provider?.field_sources?.[field.key] !== 'env');
+
+    const saveButton = document.createElement('button');
+    saveButton.type = 'submit';
+    saveButton.className = 'btn btn-primary';
+    saveButton.textContent = 'Guardar configuracion';
+    saveButton.disabled = !canEditAnyField;
+    actions.appendChild(saveButton);
+
+    if (saveButton.disabled) {
+      const lockedMeta = document.createElement('span');
+      lockedMeta.className = 'oauth-provider-meta';
+      lockedMeta.textContent = 'Este proveedor se controla desde variables de entorno.';
+      actions.appendChild(lockedMeta);
+    }
+
+    form.appendChild(actions);
+    form.addEventListener('submit', handleOAuthProviderSave);
+
+    card.appendChild(form);
+    elements.oauthProvidersGrid.appendChild(card);
+  });
+}
+
+function setOAuthSetupState(message, tone = 'info') {
+  elements.oauthSetupState.textContent = message;
+  elements.oauthSetupState.className = `status-box status-inline ${tone}`;
+}
+
+async function handleOAuthProviderSave(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const service = form.dataset.service;
+  const setup = OAUTH_PROVIDER_SETUP[service];
+  if (!setup) {
+    return;
+  }
+
+  const payload = {};
+  setup.fields.forEach((field) => {
+    const input = form.querySelector(`[name="${field.key}"]`);
+    if (!input || input.readOnly) {
+      return;
+    }
+
+    if (field.key === 'client_secret' && !input.value.trim()) {
+      return;
+    }
+
+    payload[field.key] = input.value.trim();
+  });
+
+  try {
+    setOAuthSetupState(`Guardando configuracion OAuth de ${setup.title}...`, 'info');
+    const { response, data } = await apiFetch(`/oauth/providers/${service}`, {
+      method: 'PUT',
+      authenticated: true,
+      body: payload
+    });
+
+    if (!response.ok) {
+      throw new Error(data.error || 'No se pudo guardar la configuracion OAuth.');
+    }
+
+    showAlert(`Configuracion OAuth de ${setup.title} guardada.`, 'success');
+    await loadOAuthProviders();
+  } catch (error) {
+    setOAuthSetupState(error.message || 'No se pudo guardar la configuracion OAuth.', 'error');
+    showAlert(error.message || 'No se pudo guardar la configuracion OAuth.', 'error');
   }
 }
 
@@ -748,9 +1331,90 @@ async function refreshDetectedKeyState(key) {
     renderBindings();
   } catch (error) {
     state.detectedKeyState = null;
-    elements.detectedKeyHint.textContent = 'La key se detecto, pero no se pudo validar contra el servidor.';
+    if (elements.detectedKeyHint) {
+      elements.detectedKeyHint.textContent = 'No se pudo validar la key.';
+    }
     setUSBStatus('La key se detecto, pero fallo la validacion con el servidor.', 'error');
     syncDevicePanels();
+  }
+}
+
+async function openUSBPort(port, options = {}) {
+  const { source = 'manual', showFailureAlert = true } = options;
+
+  if (!port) {
+    return false;
+  }
+
+  if (state.port === port) {
+    return true;
+  }
+
+  try {
+    resetSerialLog();
+    state.serialBuffer = '';
+    await port.open({ baudRate: SERIAL_BAUD_RATE });
+    state.port = port;
+    savePreferredPortHint(port);
+
+    await refreshAuthorizedPortsState();
+    appendSerialLog(`[usb] Puerto ${source === 'auto' ? 'reconectado' : 'abierto'} a ${SERIAL_BAUD_RATE} baudios`);
+    setUSBStatus(
+      source === 'auto'
+        ? 'ESP autorizado detectado. Reconectando automaticamente...'
+        : 'Puerto conectado. Consultando el estado del ESP...',
+      'info'
+    );
+    syncDevicePanels();
+
+    void startSerialReader();
+
+    await wait(250);
+    await refreshDeviceSnapshot();
+    return true;
+  } catch (error) {
+    state.port = null;
+    renderSerialCapabilityState();
+
+    const message = source === 'auto'
+      ? 'Se detecto un ESP autorizado, pero el puerto no se pudo abrir. Cierra otras apps que usen el serial y vuelve a intentarlo.'
+      : 'No fue posible abrir el puerto USB.';
+
+    setUSBStatus(message, 'error');
+    if (showFailureAlert) {
+      showAlert(message, 'error');
+    }
+    return false;
+  }
+}
+
+async function tryAutoConnectAuthorizedPort() {
+  if (!('serial' in navigator) || state.port || state.autoConnectInProgress) {
+    return 'none';
+  }
+
+  const ports = await refreshAuthorizedPortsState();
+  if (ports.length === 0) {
+    return 'none';
+  }
+
+  const { port, ambiguous } = chooseAuthorizedPort(ports);
+  if (!port) {
+    return ambiguous ? 'ambiguous' : 'none';
+  }
+
+  state.autoConnectInProgress = true;
+  renderSerialCapabilityState();
+
+  try {
+    const opened = await openUSBPort(port, {
+      source: 'auto',
+      showFailureAlert: false
+    });
+    return opened ? 'connected' : 'failed';
+  } finally {
+    state.autoConnectInProgress = false;
+    renderSerialCapabilityState();
   }
 }
 
@@ -760,29 +1424,25 @@ async function connectUSB() {
     return;
   }
 
+  const autoConnectStatus = await tryAutoConnectAuthorizedPort();
+  if (autoConnectStatus === 'connected' || autoConnectStatus === 'failed') {
+    return;
+  }
+  if (autoConnectStatus === 'ambiguous') {
+    setUSBStatus('Hay varios puertos autorizados. Elige manualmente el ESP correcto.', 'info');
+  }
+
   try {
     const port = await navigator.serial.requestPort();
-    resetSerialLog();
-    state.serialBuffer = '';
-    await port.open({ baudRate: SERIAL_BAUD_RATE });
-    state.port = port;
-
-    updateUSBButtons(true);
-    appendSerialLog('[usb] Puerto abierto a 115200 baudios');
-    setUSBStatus('Puerto conectado. Consultando el estado del ESP...', 'info');
-    syncDevicePanels();
-
-    void startSerialReader();
-
-    await wait(250);
-    await refreshDeviceSnapshot();
+    await refreshAuthorizedPortsState();
+    await openUSBPort(port, {
+      source: 'manual',
+      showFailureAlert: true
+    });
   } catch (error) {
     if (error && error.name === 'NotFoundError') {
       return;
     }
-
-    showAlert('No fue posible abrir el puerto USB.', 'error');
-    setUSBStatus('Fallo al abrir el puerto USB.', 'error');
   }
 }
 
@@ -992,6 +1652,12 @@ function protocolErrorMessage(frame) {
       return 'PIN o frase secreta incorrectos.';
     case 'account_not_found':
       return 'La cuenta no existe dentro del ESP.';
+    case 'missing_token_action':
+      return 'El ESP recibio un comando OAuth incompleto.';
+    case 'invalid_token_payload':
+      return 'El token OAuth no pudo guardarse en el ESP. Repite el login o vuelve a autorizar la cuenta.';
+    case 'oauth_session_not_found':
+      return 'Esa cuenta todavia no tiene una sesion OAuth guardada en el ESP.';
     case 'rate_limited':
       return 'El ESP activo la proteccion por intentos fallidos.';
     case 'invalid_param':
@@ -1027,7 +1693,9 @@ async function applyDetectedKey(key) {
 
   state.detectedKey = key;
   elements.detectedKeyValue.textContent = formatKey(key);
-  elements.detectedKeyHint.textContent = 'Key detectada por USB. Validando contra el servidor...';
+  if (elements.detectedKeyHint) {
+    elements.detectedKeyHint.textContent = 'Validando key...';
+  }
   syncDevicePanels();
   await refreshDetectedKeyState(key);
 }
@@ -1188,8 +1856,10 @@ function syncDevicePanels() {
   elements.accountsListPanel.hidden = !hasVaultSurface;
 
   if (!state.detectedKey) {
-    elements.detectedKeyHint.textContent = 'Cuando el ESP responda por serial, aqui veras su key unica y el estado del vault.';
-  } else if (state.detectedKeyState) {
+    if (elements.detectedKeyHint) {
+      elements.detectedKeyHint.textContent = 'Esperando key...';
+    }
+  } else if (state.detectedKeyState && elements.detectedKeyHint) {
     elements.detectedKeyHint.textContent = describeKeyState(state.detectedKeyState);
   }
 
@@ -1244,69 +1914,69 @@ function syncVaultPanels() {
   elements.vaultUnlockedPanel.hidden = true;
 
   if (!state.port) {
-    setVaultNotice('Conecta un ESP autorizado para consultar su vault.', 'info');
-    setDeviceGuardState('Conecta un ESP, valida su key y desbloquea el vault para administrar cuentas.', 'info');
-    setDeviceAccountsState('Conecta un ESP autorizado para consultar las cuentas del vault.', 'info');
+    setVaultNotice('Conecta un ESP.', 'info');
+    setDeviceGuardState('Conecta un ESP.', 'info');
+    setDeviceAccountsState('Conecta un ESP.', 'info');
     return;
   }
 
   if (!isValidDeviceKey(state.detectedKey)) {
-    setVaultNotice('Solicita primero el DEVICE_ID del ESP por USB.', 'info');
-    setDeviceGuardState('Solicita primero la key del ESP para saber con que dispositivo estas trabajando.', 'info');
-    setDeviceAccountsState('Solicita primero la key del ESP para saber que vault quieres leer.', 'info');
+    setVaultNotice('Lee la key del ESP.', 'info');
+    setDeviceGuardState('Lee la key del ESP.', 'info');
+    setDeviceAccountsState('Lee la key del ESP.', 'info');
     return;
   }
 
   if (!state.detectedKeyState) {
-    setVaultNotice('Validando la key detectada contra el servidor...', 'info');
-    setDeviceGuardState('Esperando la validacion de la key contra tu cuenta.', 'info');
-    setDeviceAccountsState('Esperando la validacion de la key para habilitar el listado del vault.', 'info');
+    setVaultNotice('Validando key...', 'info');
+    setDeviceGuardState('Validando key...', 'info');
+    setDeviceAccountsState('Validando key...', 'info');
     return;
   }
 
   if (!authorized) {
     if (state.detectedKeyState.available) {
-      setVaultNotice('Esta key aun no esta reservada. Vinculala a tu cuenta para operar el vault.', 'warning');
-      setDeviceGuardState('Reserva la key detectada antes de enviar informacion al ESP.', 'warning');
-      setDeviceAccountsState('Reserva primero esta key para consultar las cuentas del vault.', 'warning');
+      setVaultNotice('Vincula esta key a tu cuenta.', 'warning');
+      setDeviceGuardState('Vincula esta key a tu cuenta.', 'warning');
+      setDeviceAccountsState('Vincula esta key a tu cuenta.', 'warning');
     } else {
-      setVaultNotice('Esta key pertenece a otra cuenta y no se puede administrar desde esta sesion.', 'error');
-      setDeviceGuardState('La key detectada pertenece a otra cuenta. No puedes modificar este ESP.', 'error');
-      setDeviceAccountsState('La key detectada pertenece a otra cuenta. No puedes listar sus cuentas.', 'error');
+      setVaultNotice('Esta key pertenece a otra cuenta.', 'error');
+      setDeviceGuardState('Esta key pertenece a otra cuenta.', 'error');
+      setDeviceAccountsState('Esta key pertenece a otra cuenta.', 'error');
     }
     return;
   }
 
   if (!state.deviceInfo) {
-    setVaultNotice('Consulta el estado del ESP para saber si el vault existe o esta bloqueado.', 'info');
-    setDeviceGuardState('Actualiza el estado del ESP antes de operar sus cuentas.', 'info');
-    setDeviceAccountsState('Actualiza el estado del ESP para saber si el vault existe.', 'info');
+    setVaultNotice('Actualiza el ESP.', 'info');
+    setDeviceGuardState('Actualiza el ESP.', 'info');
+    setDeviceAccountsState('Actualiza el ESP.', 'info');
     return;
   }
 
   if (!state.deviceInfo.vault_exists) {
     elements.vaultCreateForm.hidden = false;
-    setVaultNotice('Este ESP todavia no tiene un vault. Crealo por USB para empezar a guardar cuentas.', 'warning');
-    setDeviceGuardState('Primero crea el vault local del ESP. Sin eso no hay donde guardar cuentas.', 'warning');
-    setDeviceAccountsState('Este ESP todavia no tiene un vault creado, asi que no hay cuentas para listar.', 'warning');
+    setVaultNotice('Crea el vault.', 'warning');
+    setDeviceGuardState('Crea el vault.', 'warning');
+    setDeviceAccountsState('Aun no hay vault.', 'warning');
     return;
   }
 
   if (!state.deviceInfo.vault_unlocked) {
     elements.vaultUnlockForm.hidden = false;
-    setVaultNotice('El vault existe, pero esta bloqueado. Desbloquealo para administrar cuentas.', 'info');
-    setDeviceGuardState('Desbloquea el vault para leer o guardar cuentas dentro del ESP.', 'info');
-    setDeviceAccountsState('El vault existe, pero esta bloqueado. Desbloquealo para leer las cuentas guardadas.', 'info');
+    setVaultNotice('Desbloquea el vault.', 'info');
+    setDeviceGuardState('Desbloquea el vault.', 'info');
+    setDeviceAccountsState('Desbloquea el vault.', 'info');
     return;
   }
 
   elements.vaultUnlockedPanel.hidden = false;
-  setVaultNotice('Vault desbloqueado. Todo lo que guardes ahora se escribe directamente en el ESP.', 'success');
-  setDeviceGuardState('ESP listo. Puedes crear, rotar o borrar cuentas dentro del vault local.', 'success');
+  setVaultNotice('Vault desbloqueado.', 'success');
+  setDeviceGuardState('ESP listo.', 'success');
   setDeviceAccountsState(
     state.deviceAccounts.length > 0
-      ? 'Estas son las cuentas que viven dentro del vault del ESP.'
-      : 'El vault esta desbloqueado. Todavia no hay cuentas guardadas en este dispositivo.',
+      ? 'Cuentas listas.'
+      : 'Aun no hay cuentas.',
     state.deviceAccounts.length > 0 ? 'success' : 'info'
   );
 }
@@ -1343,8 +2013,8 @@ async function handleVaultCreate(event) {
   }
 
   try {
-    setVaultNotice('Creando vault en el ESP. Esta operacion puede tardar unos segundos.', 'info');
-    setDeviceAccountsState('Esperando a que el ESP cree el vault antes de listar cuentas.', 'info');
+    setVaultNotice('Creando vault...', 'info');
+    setDeviceAccountsState('Creando vault...', 'info');
     await sendProtocolRequest(`SESSION|CREATE|${encodeToken(name)}|${encodeToken(pin)}|${encodeToken(phrase)}`, {
       timeoutMs: VAULT_OPERATION_TIMEOUT_MS
     });
@@ -1354,8 +2024,8 @@ async function handleVaultCreate(event) {
   } catch (error) {
     if (String(error.message || '') === 'TIMEOUT') {
       showAlert('El ESP tardo demasiado en crear el vault. Espera unos segundos y vuelve a consultar el estado del dispositivo.', 'error');
-      setVaultNotice('La creacion del vault tardo demasiado. Si el ESP sigue trabajando, espera un poco y pulsa "Actualizar ESP".', 'error');
-      setDeviceAccountsState('Todavia no se pudo confirmar la creacion del vault.', 'error');
+      setVaultNotice('Timeout al crear el vault.', 'error');
+      setDeviceAccountsState('Timeout al crear el vault.', 'error');
       return;
     }
 
@@ -1375,8 +2045,8 @@ async function handleVaultUnlock(event) {
   }
 
   try {
-    setVaultNotice('Desbloqueando vault. El ESP puede tardar varios segundos derivando las claves.', 'info');
-    setDeviceAccountsState('Esperando a que el ESP desbloquee el vault para poder listar las cuentas.', 'info');
+    setVaultNotice('Desbloqueando vault...', 'info');
+    setDeviceAccountsState('Desbloqueando vault...', 'info');
     await sendProtocolRequest(`SESSION|UNLOCK|${encodeToken(pin)}|${encodeToken(phrase)}`, {
       timeoutMs: VAULT_OPERATION_TIMEOUT_MS
     });
@@ -1386,8 +2056,8 @@ async function handleVaultUnlock(event) {
   } catch (error) {
     if (String(error.message || '') === 'TIMEOUT') {
       showAlert('El ESP tardo demasiado en desbloquear el vault. Espera unos segundos y vuelve a actualizar el estado del dispositivo.', 'error');
-      setVaultNotice('El desbloqueo tardo demasiado. Si el ESP sigue trabajando, espera un poco y pulsa "Actualizar ESP".', 'error');
-      setDeviceAccountsState('No se pudo confirmar a tiempo el desbloqueo del vault.', 'error');
+      setVaultNotice('Timeout al desbloquear.', 'error');
+      setDeviceAccountsState('Timeout al desbloquear.', 'error');
       return;
     }
 
@@ -1446,6 +2116,11 @@ function encodeToken(value) {
   return encodeURIComponent(String(value || '').trim());
 }
 
+function encodeOptionalToken(value) {
+  const normalized = String(value || '').trim();
+  return encodeToken(normalized || OAUTH_EMPTY_FIELD);
+}
+
 async function loadDeviceAccounts(showFeedback = true) {
   if (!canManageDeviceAccounts()) {
     state.deviceAccounts = [];
@@ -1455,7 +2130,7 @@ async function loadDeviceAccounts(showFeedback = true) {
   }
 
   try {
-    setDeviceAccountsState('Leyendo las cuentas guardadas dentro del vault del ESP...', 'info');
+    setDeviceAccountsState('Leyendo cuentas...', 'info');
     const frames = await sendProtocolRequest('GET|ACCOUNTS', {
       completion: 'done',
       timeoutMs: 10000
@@ -1470,8 +2145,8 @@ async function loadDeviceAccounts(showFeedback = true) {
     syncDevicePanels();
     setDeviceAccountsState(
       state.deviceAccounts.length > 0
-        ? `${state.deviceAccounts.length} cuenta(s) cargadas desde el vault del ESP.`
-        : 'El vault esta desbloqueado, pero todavia no hay cuentas guardadas.',
+        ? `${state.deviceAccounts.length} cuenta(s).`
+        : 'Aun no hay cuentas.',
       state.deviceAccounts.length > 0 ? 'success' : 'info'
     );
 
@@ -1484,7 +2159,7 @@ async function loadDeviceAccounts(showFeedback = true) {
     syncDevicePanels();
     setDeviceAccountsState(
       String(error.message || '') === 'TIMEOUT'
-        ? 'El ESP tardo demasiado en devolver el listado de cuentas.'
+        ? 'Timeout al leer cuentas.'
         : (error.message || 'No fue posible leer las cuentas del ESP.'),
       'error'
     );
@@ -1496,6 +2171,7 @@ async function loadDeviceAccounts(showFeedback = true) {
 
 function parseAccountFrame(frame) {
   const usesExtendedShape = frame.params.length >= 13;
+  const hasOAuthShape = frame.params.length >= 16;
   const [
     accountId,
     rawService,
@@ -1509,7 +2185,10 @@ function parseAccountFrame(frame) {
     baseLength,
     level,
     symbols,
-    avoidAmbiguous
+    avoidAmbiguous,
+    oauthReady,
+    oauthExpiresAt,
+    oauthHasRefresh
   ] = usesExtendedShape
     ? frame.params
     : [
@@ -1525,7 +2204,10 @@ function parseAccountFrame(frame) {
         frame.params[5],
         frame.params[6],
         frame.params[7],
-        frame.params[8]
+        frame.params[8],
+        '0',
+        '0',
+        '0'
       ];
 
   if (!accountId) {
@@ -1547,6 +2229,11 @@ function parseAccountFrame(frame) {
     tenant: decodeToken(rawTenant),
     rotate_hours: parseInteger(rotateHours, 0),
     counter: parseInteger(counter, 0),
+    oauth: {
+      authorized: hasOAuthShape ? (oauthReady === '1') : false,
+      expires_at: hasOAuthShape ? parseInteger(oauthExpiresAt, 0) : 0,
+      has_refresh: hasOAuthShape ? (oauthHasRefresh === '1') : false
+    },
     policy: {
       base_length: parseInteger(baseLength, 16),
       level: parseInteger(level, 1),
@@ -1564,6 +2251,573 @@ function decodeToken(value) {
   }
 }
 
+function decodeOptionalToken(value) {
+  const decoded = decodeToken(value);
+  return decoded === OAUTH_EMPTY_FIELD ? '' : decoded;
+}
+
+function getOAuthProviderState(service) {
+  return state.oauthProviders[normalizeServiceKey(service)] || null;
+}
+
+function isOAuthSessionActive(account) {
+  if (!account?.oauth?.authorized) {
+    return false;
+  }
+
+  if (!account.oauth.expires_at) {
+    return true;
+  }
+
+  return account.oauth.expires_at > Math.floor(Date.now() / 1000);
+}
+
+function formatOAuthExpiry(epochSeconds) {
+  if (!epochSeconds) {
+    return 'sin fecha';
+  }
+
+  return new Date(epochSeconds * 1000).toLocaleString('es-ES', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+}
+
+function describeOAuthAccountState(account) {
+  const provider = getOAuthProviderState(account.service);
+  if (!provider?.configured) {
+    return {
+      tone: 'warning',
+      text: 'OAuth no configurado en este servidor.'
+    };
+  }
+
+  if (!account.oauth?.authorized) {
+    return {
+      tone: 'info',
+      text: 'Sin sesion OAuth guardada en el ESP.'
+    };
+  }
+
+  if (isOAuthSessionActive(account)) {
+    return {
+      tone: 'success',
+      text: account.oauth.expires_at
+        ? `Sesion OAuth lista hasta ${formatOAuthExpiry(account.oauth.expires_at)}.`
+        : 'Sesion OAuth lista en el ESP.'
+    };
+  }
+
+  return {
+    tone: 'warning',
+    text: `La sesion OAuth expiró el ${formatOAuthExpiry(account.oauth.expires_at)}.`
+  };
+}
+
+async function startOAuthSession(account) {
+  const { response, data } = await apiFetch('/oauth/start', {
+    method: 'POST',
+    authenticated: true,
+    body: {
+      service: account.service,
+      account_id: account.account_id,
+      scopes: account.scopes,
+      tenant: account.tenant,
+      login_hint: account.username
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(data.error || 'No se pudo iniciar el flujo OAuth.');
+  }
+
+  return data;
+}
+
+async function pollOAuthSession(sessionId, intervalSeconds, serviceName) {
+  let waitSeconds = Math.max(2, Number.parseInt(intervalSeconds, 10) || DEFAULT_OAUTH_POLL_INTERVAL_SECONDS);
+
+  while (true) {
+    await wait(waitSeconds * 1000);
+
+    const { response, data } = await apiFetch('/oauth/poll', {
+      method: 'POST',
+      authenticated: true,
+      body: {
+        session_id: sessionId
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(data.error || `No se pudo completar el login OAuth de ${serviceName}.`);
+    }
+
+    if (data.status === 'authorized' && data.token) {
+      return data.token;
+    }
+
+    if (data.status === 'slow_down') {
+      waitSeconds = Math.max(waitSeconds + 5, Number.parseInt(data.interval, 10) || waitSeconds + 5);
+      continue;
+    }
+
+    waitSeconds = Math.max(2, Number.parseInt(data.interval, 10) || waitSeconds);
+  }
+}
+
+function openOAuthPopup(url, title) {
+  return window.open(
+    url,
+    `klaus-${normalizeServiceKey(title)}`,
+    'popup=yes,width=540,height=760,resizable=yes,scrollbars=yes'
+  );
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildOAuthDevicePopupHtml({
+  serviceLabel,
+  accountLabel,
+  userCode,
+  verificationUrl,
+  message,
+  stateMessage,
+  tone = 'info'
+}) {
+  const palette = {
+    info: {
+      badgeBg: 'rgba(124, 228, 255, 0.14)',
+      badgeColor: '#dbf8ff'
+    },
+    success: {
+      badgeBg: 'rgba(61, 208, 166, 0.16)',
+      badgeColor: '#dffff3'
+    },
+    error: {
+      badgeBg: 'rgba(255, 125, 125, 0.16)',
+      badgeColor: '#ffe8e8'
+    }
+  };
+
+  const colors = palette[tone] || palette.info;
+  const safeServiceLabel = escapeHtml(serviceLabel || 'Proveedor');
+  const safeAccountLabel = escapeHtml(accountLabel || 'cuenta');
+  const safeUserCode = escapeHtml(userCode || '------');
+  const safeMessage = escapeHtml(message || `Copia este codigo para conectar ${safeAccountLabel}.`);
+  const safeStateMessage = escapeHtml(stateMessage || 'Esperando autorizacion...');
+  const hasUrl = Boolean(verificationUrl);
+  const serializedUrl = JSON.stringify(String(verificationUrl || ''));
+  const serializedCode = JSON.stringify(String(userCode || ''));
+
+  return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>KLAUS ${safeServiceLabel}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08121e;
+      --panel: rgba(255,255,255,0.06);
+      --border: rgba(255,255,255,0.09);
+      --muted: #9fb5ca;
+      --text: #f4f7fb;
+      --accent: #ff7f32;
+      --accent-strong: #ffb347;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+      font-family: "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(255,127,50,0.18), transparent 34%),
+        linear-gradient(180deg, #0c1726 0%, var(--bg) 62%);
+      color: var(--text);
+    }
+    .card {
+      width: min(32rem, calc(100vw - 2rem));
+      padding: 1.4rem;
+      border-radius: 26px;
+      background: rgba(8, 18, 30, 0.92);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .eyebrow {
+      margin: 0 0 0.4rem;
+      color: #ffd5b4;
+      font-size: 0.82rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.55rem;
+      line-height: 1.2;
+    }
+    p {
+      margin: 0;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+    .code-wrap {
+      display: grid;
+      gap: 0.6rem;
+      margin: 1rem 0;
+    }
+    .code {
+      display: grid;
+      place-items: center;
+      min-height: 4.5rem;
+      padding: 1rem;
+      border-radius: 18px;
+      background: rgba(3,10,18,0.84);
+      border: 1px solid rgba(124,228,255,0.18);
+      color: #fff3de;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: clamp(1.25rem, 5vw, 1.9rem);
+      letter-spacing: 0.22em;
+      text-align: center;
+      word-break: break-word;
+    }
+    .state {
+      margin-top: 0.9rem;
+      padding: 0.9rem 1rem;
+      border-radius: 16px;
+      background: ${colors.badgeBg};
+      color: ${colors.badgeColor};
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.88rem 1.15rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    .primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #111722;
+      font-weight: 700;
+    }
+    .secondary {
+      background: rgba(255,255,255,0.08);
+      color: var(--text);
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p class="eyebrow">KLAUS / ${safeServiceLabel}</p>
+    <h1>Conecta ${safeAccountLabel}</h1>
+    <p>${safeMessage}</p>
+    <div class="code-wrap">
+      <span>Codigo para el dispositivo</span>
+      <div id="deviceCode" class="code">${safeUserCode}</div>
+    </div>
+    <div id="stateBox" class="state">${safeStateMessage}</div>
+    <div class="actions">
+      <button id="copyBtn" class="primary" type="button">Copiar codigo</button>
+      <button id="openBtn" class="secondary" type="button" ${hasUrl ? '' : 'disabled'}>Abrir pagina oficial</button>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const verificationUrl = ${serializedUrl};
+      const userCode = ${serializedCode};
+      const copyBtn = document.getElementById('copyBtn');
+      const openBtn = document.getElementById('openBtn');
+
+      async function copyCode() {
+        if (!userCode) {
+          return;
+        }
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(userCode);
+          } else {
+            const range = document.createRange();
+            range.selectNodeContents(document.getElementById('deviceCode'));
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            document.execCommand('copy');
+            selection.removeAllRanges();
+          }
+          copyBtn.textContent = 'Codigo copiado';
+        } catch (error) {
+          copyBtn.textContent = 'Copia manual';
+        }
+      }
+
+      copyBtn.addEventListener('click', function () {
+        void copyCode();
+      });
+
+      openBtn.addEventListener('click', function () {
+        if (!verificationUrl) {
+          return;
+        }
+        window.open(verificationUrl, '_blank', 'noopener');
+      });
+    }());
+  </script>
+</body>
+</html>`;
+}
+
+function renderOAuthDevicePopup(popupWindow, payload) {
+  if (!popupWindow || popupWindow.closed) {
+    return false;
+  }
+
+  popupWindow.document.open();
+  popupWindow.document.write(buildOAuthDevicePopupHtml(payload));
+  popupWindow.document.close();
+  try {
+    popupWindow.focus();
+  } catch (error) {
+    // ignore
+  }
+  return true;
+}
+
+function waitForOAuthPopupResult(sessionId, popupWindow, timeoutMs = 4 * 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+
+    function cleanup() {
+      window.removeEventListener('message', onMessage);
+      window.clearInterval(closeCheckId);
+      window.clearTimeout(timeoutId);
+    }
+
+    function onMessage(event) {
+      if (event.origin !== window.location.origin) {
+        return;
+      }
+
+      const payload = event.data || {};
+      if (payload.type !== 'klaus-oauth-result' || payload.session_id !== sessionId) {
+        return;
+      }
+
+      cleanup();
+
+      if (!payload.ok || !payload.token) {
+        reject(new Error(payload.error || 'La ventana OAuth no devolvio un token valido.'));
+        return;
+      }
+
+      resolve(payload.token);
+    }
+
+    const closeCheckId = window.setInterval(() => {
+      if (popupWindow && popupWindow.closed && Date.now() - startedAt > 1500) {
+        cleanup();
+        reject(new Error('La ventana de autorizacion se cerro antes de terminar el login.'));
+      }
+    }, 500);
+
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('La autorizacion OAuth tardo demasiado.'));
+    }, timeoutMs);
+
+    window.addEventListener('message', onMessage);
+  });
+}
+
+async function storeOAuthTokenOnDevice(accountId, token) {
+  const tokenType = String(token.token_type || 'Bearer').trim();
+  const accessToken = String(token.access_token || '').trim();
+  const refreshToken = String(token.refresh_token || '').trim();
+  const scope = String(token.scope || '').trim();
+  const expiresAt = Number.parseInt(token.expires_at, 10) || 0;
+
+  if (!accessToken) {
+    throw new Error('El proveedor no devolvio un access token.');
+  }
+
+  await sendProtocolRequest([
+    'ACCOUNT',
+    'TOKEN',
+    'SET',
+    accountId,
+    encodeOptionalToken(tokenType),
+    encodeOptionalToken(accessToken),
+    encodeOptionalToken(refreshToken),
+    String(expiresAt),
+    encodeOptionalToken(scope)
+  ].join('|'), {
+    timeoutMs: 20000
+  });
+}
+
+async function runDeviceOAuthScript(account, serviceLabel) {
+  const helperPopup = openOAuthPopup('', `${serviceLabel}-device-code`);
+  if (!helperPopup) {
+    throw new Error('El navegador bloqueo la ventana emergente del codigo. Permite pop-ups para KLAUS.');
+  }
+
+  renderOAuthDevicePopup(helperPopup, {
+    serviceLabel,
+    accountLabel: account.label || account.username,
+    userCode: '',
+    verificationUrl: '',
+    message: `Preparando el codigo de ${serviceLabel} para ${account.label || account.username}...`,
+    stateMessage: 'Espera un momento mientras KLAUS solicita el codigo al proveedor.',
+    tone: 'info'
+  });
+
+  try {
+    const authSession = await startOAuthSession(account);
+    const verificationUrl = authSession.verification_uri_complete || authSession.verification_uri || '';
+    const instructions = authSession.message
+      || `${serviceLabel}: abre la pagina oficial, pega este codigo y termina el login.`;
+
+    showDeviceOAuthPanel({
+      serviceLabel,
+      account,
+      verificationUrl,
+      userCode: authSession.user_code || '',
+      message: instructions
+    });
+
+    renderOAuthDevicePopup(helperPopup, {
+      serviceLabel,
+      accountLabel: account.label || account.username,
+      userCode: authSession.user_code || '',
+      verificationUrl,
+      message: instructions,
+      stateMessage: 'Copia el codigo y abre la pagina oficial.',
+      tone: 'info'
+    });
+
+    setDeviceAccountsState(`Autorizando ${serviceLabel}...`, 'info');
+    setDeviceOAuthState(`Esperando autorizacion de ${serviceLabel}...`, 'info');
+    const token = await pollOAuthSession(authSession.session_id, authSession.interval, serviceLabel);
+    setDeviceOAuthState(`Guardando sesion de ${serviceLabel}...`, 'success');
+    renderOAuthDevicePopup(helperPopup, {
+      serviceLabel,
+      accountLabel: account.label || account.username,
+      userCode: authSession.user_code || '',
+      verificationUrl,
+      message: instructions,
+      stateMessage: `Guardando sesion de ${serviceLabel}...`,
+      tone: 'success'
+    });
+    await storeOAuthTokenOnDevice(account.account_id, token);
+    hideDeviceOAuthPanel(true);
+    if (helperPopup && !helperPopup.closed) {
+      helperPopup.close();
+    }
+  } catch (error) {
+    setDeviceOAuthState(error.message || `No se pudo completar la autorizacion de ${serviceLabel}.`, 'error');
+    renderOAuthDevicePopup(helperPopup, {
+      serviceLabel,
+      accountLabel: account.label || account.username,
+      userCode: state.activeDeviceOAuth?.userCode || '',
+      verificationUrl: state.activeDeviceOAuth?.verificationUrl || '',
+      message: `No se pudo completar la autorizacion de ${serviceLabel}.`,
+      stateMessage: error.message || 'La autorizacion fallo. Revisa el codigo e intenta otra vez.',
+      tone: 'error'
+    });
+    throw error;
+  }
+}
+
+async function runSpotifyOAuthScript(account) {
+  await runPopupOAuthScript(account, 'Spotify');
+}
+
+async function runPopupOAuthScript(account, serviceLabel) {
+  const authSession = await startOAuthSession(account);
+  const popupWindow = openOAuthPopup(authSession.authorization_url, serviceLabel);
+
+  if (!popupWindow) {
+    throw new Error(`El navegador bloqueo la ventana emergente de ${serviceLabel}.`);
+  }
+
+  setDeviceAccountsState(`Autorizando ${serviceLabel}...`, 'info');
+  const token = await waitForOAuthPopupResult(authSession.session_id, popupWindow);
+  setDeviceAccountsState(`Guardando sesion de ${serviceLabel}...`, 'success');
+  await storeOAuthTokenOnDevice(account.account_id, token);
+  hideDeviceOAuthPanel(true);
+}
+
+async function runGoogleOAuthScript(account) {
+  await runPopupOAuthScript(account, 'Google');
+}
+
+async function runGitHubOAuthScript(account) {
+  await runDeviceOAuthScript(account, 'GitHub');
+}
+
+async function runMicrosoftOAuthScript(account) {
+  await runDeviceOAuthScript(account, 'Microsoft');
+}
+
+const OAUTH_SERVICE_SCRIPTS = {
+  google: runGoogleOAuthScript,
+  github: runGitHubOAuthScript,
+  microsoft: runMicrosoftOAuthScript,
+  spotify: runSpotifyOAuthScript
+};
+
+async function startAccountOAuthLogin(account) {
+  if (!canManageDeviceAccounts()) {
+    showAlert('El ESP debe estar conectado, autorizado y desbloqueado para iniciar el login.', 'error');
+    return;
+  }
+
+  const provider = getOAuthProviderState(account.service);
+  if (!provider?.configured) {
+    showAlert(`El proveedor ${account.service_name || account.service} no esta configurado en el servidor.`, 'error');
+    return;
+  }
+
+  const runner = OAUTH_SERVICE_SCRIPTS[normalizeServiceKey(account.service)];
+  if (!runner) {
+    showAlert(`No existe un script OAuth configurado para ${account.service_name || account.service}.`, 'error');
+    return;
+  }
+
+  try {
+    hideDeviceOAuthPanel(true);
+    setDeviceAccountsState(`Iniciando el script OAuth de ${account.service_name || account.service} para ${account.label || account.username}...`, 'info');
+    await runner(account);
+    showAlert(`La cuenta ${account.label || account.username} ya quedo conectada con ${account.service_name || account.service}.`, 'success');
+    await refreshDeviceSnapshot();
+    setDeviceAccountsState('Sesion OAuth guardada correctamente en el ESP.', 'success');
+  } catch (error) {
+    setDeviceAccountsState(error.message || 'No se pudo completar el login OAuth.', 'error');
+    showAlert(error.message || 'No se pudo completar el login OAuth.', 'error');
+  }
+}
+
 async function handleDeviceAccountSubmit(event) {
   event.preventDefault();
 
@@ -1574,13 +2828,15 @@ async function handleDeviceAccountSubmit(event) {
 
   syncAccountServiceProfile();
 
+  const serviceKey = normalizeServiceKey(elements.accountService.value);
+  const profile = getServiceProfile(serviceKey) || SERVICE_PROFILES.google;
   const values = {
-    service: normalizeServiceKey(elements.accountService.value),
+    service: serviceKey,
     label: elements.accountLabel.value.trim(),
     username: elements.accountUsername.value.trim(),
-    authFlow: elements.accountAuthFlow.value.trim(),
-    scopes: elements.accountScopes.value.trim(),
-    tenant: elements.accountTenant.value.trim() || 'common'
+    authFlow: profile.authFlow,
+    scopes: elements.accountScopes.value.trim() || profile.defaultScopes,
+    tenant: profile.usesTenant ? getSelectedTenantValue() : ''
   };
 
   const validationError = validateDeviceAccountValues(values);
@@ -1589,6 +2845,7 @@ async function handleDeviceAccountSubmit(event) {
     return;
   }
 
+  const hiddenPolicy = getHiddenAccountPolicy(values.service);
   const command = [
     'ACCOUNT',
     'ADD',
@@ -1598,22 +2855,17 @@ async function handleDeviceAccountSubmit(event) {
     encodeToken(values.authFlow),
     encodeToken(values.scopes),
     encodeToken(values.service === 'microsoft' ? values.tenant : ''),
-    elements.accountRotateHours.value,
-    elements.accountBaseLength.value,
-    elements.accountSecurityLevel.value,
-    elements.accountSymbols.checked ? '1' : '0',
-    elements.accountAvoidAmbiguous.checked ? '1' : '0'
+    hiddenPolicy.rotateHours,
+    hiddenPolicy.baseLength,
+    hiddenPolicy.level,
+    hiddenPolicy.symbols,
+    hiddenPolicy.avoidAmbiguous
   ].join('|');
 
   try {
     await sendProtocolRequest(command, { timeoutMs: 7000 });
     elements.deviceAccountForm.reset();
     syncAccountServiceProfile(true);
-    elements.accountRotateHours.value = '168';
-    elements.accountBaseLength.value = '16';
-    elements.accountSecurityLevel.value = '1';
-    elements.accountSymbols.checked = true;
-    elements.accountAvoidAmbiguous.checked = true;
     showAlert('Cuenta guardada correctamente en el ESP.', 'success');
     await refreshDeviceSnapshot();
   } catch (error) {
@@ -1628,17 +2880,20 @@ function renderDeviceAccounts() {
     const empty = document.createElement('p');
     empty.className = 'empty-state';
     if (!state.deviceInfo?.vault_exists) {
-      empty.textContent = 'Este ESP todavia no tiene un vault creado.';
+      empty.textContent = 'Aun no hay vault.';
     } else if (!state.deviceInfo?.vault_unlocked) {
-      empty.textContent = 'Desbloquea el vault para ver el listado de cuentas guardadas.';
+      empty.textContent = 'Desbloquea el vault.';
     } else {
-      empty.textContent = 'Todavia no hay cuentas cargadas en este ESP.';
+      empty.textContent = 'Aun no hay cuentas.';
     }
     elements.deviceAccountsList.appendChild(empty);
     return;
   }
 
   state.deviceAccounts.forEach((account) => {
+    const provider = getOAuthProviderState(account.service);
+    const oauthState = describeOAuthAccountState(account);
+    const oauthActive = isOAuthSessionActive(account);
     const card = document.createElement('article');
     card.className = 'device-account-card';
 
@@ -1657,17 +2912,19 @@ function renderDeviceAccounts() {
     accountId.textContent = account.account_id;
     header.appendChild(accountId);
 
-    const pill = document.createElement('span');
-    pill.className = 'device-pill info';
-    pill.textContent = `Rota cada ${account.rotate_hours}h`;
-    header.appendChild(pill);
-
     if (account.auth_flow) {
       const flowPill = document.createElement('span');
       flowPill.className = 'device-pill success';
       flowPill.textContent = account.auth_flow;
       header.appendChild(flowPill);
     }
+
+    const oauthPill = document.createElement('span');
+    oauthPill.className = `device-pill ${oauthState.tone}`;
+    oauthPill.textContent = account.oauth?.authorized
+      ? (oauthActive ? 'OAuth listo' : 'OAuth expirado')
+      : 'Sin login OAuth';
+    header.appendChild(oauthPill);
 
     left.appendChild(header);
 
@@ -1680,7 +2937,7 @@ function renderDeviceAccounts() {
 
     const meta = document.createElement('p');
     meta.className = 'device-account-meta';
-    meta.textContent = `Identificador: ${account.username} | Contador: ${account.counter}`;
+    meta.textContent = `Identificador: ${account.username}`;
     left.appendChild(meta);
 
     if (account.tenant) {
@@ -1697,22 +2954,26 @@ function renderDeviceAccounts() {
       left.appendChild(scopes);
     }
 
-    const policy = document.createElement('p');
-    policy.className = 'device-account-policy';
-    policy.textContent = `Politica: base ${account.policy.base_length}, nivel ${account.policy.level}, simbolos ${account.policy.symbols ? 'si' : 'no'}, ambiguos ${account.policy.avoid_ambiguous ? 'no' : 'si'}`;
-    left.appendChild(policy);
+    const oauthMeta = document.createElement('p');
+    oauthMeta.className = 'device-account-meta';
+    oauthMeta.textContent = oauthState.text;
+    left.appendChild(oauthMeta);
 
     const actions = document.createElement('div');
     actions.className = 'device-account-actions';
 
-    const rotateButton = document.createElement('button');
-    rotateButton.type = 'button';
-    rotateButton.className = 'btn account-rotate-btn';
-    rotateButton.textContent = 'Rotar';
-    rotateButton.addEventListener('click', () => {
-      void rotateDeviceAccount(account.account_id);
+    const loginButton = document.createElement('button');
+    loginButton.type = 'button';
+    loginButton.className = 'btn account-login-btn';
+    loginButton.textContent = account.oauth?.authorized ? 'Reautenticar' : 'Conectar cuenta';
+    loginButton.disabled = !provider?.configured;
+    loginButton.title = provider?.configured
+      ? `Ejecuta el script OAuth de ${account.service_name || account.service}.`
+      : `Configura ${account.service_name || account.service} en el servidor para habilitar este login.`;
+    loginButton.addEventListener('click', () => {
+      void startAccountOAuthLogin(account);
     });
-    actions.appendChild(rotateButton);
+    actions.appendChild(loginButton);
 
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
@@ -1789,7 +3050,7 @@ async function disconnectUSB(showNotice = true) {
   state.deviceAccounts = [];
   state.detectedKey = '';
   state.detectedKeyState = null;
-  updateUSBButtons(false);
+  await refreshAuthorizedPortsState();
   setUSBStatus('Sin conexion USB.', 'info');
   syncDevicePanels();
   renderBindings();
@@ -1808,13 +3069,28 @@ function rejectPendingRequests(reason) {
   });
 }
 
+async function handlePortConnected() {
+  await refreshAuthorizedPortsState();
+
+  if (!state.token || state.port) {
+    return;
+  }
+
+  setUSBStatus('ESP detectado por el navegador. Intentando reconectar automaticamente...', 'info');
+  const status = await tryAutoConnectAuthorizedPort();
+  if (status === 'ambiguous') {
+    setUSBStatus('Se detectaron varios puertos autorizados. Pulsa Conectar ESP para elegir el correcto.', 'info');
+  }
+}
+
 async function handlePortDisconnected() {
   if (!state.port) {
+    await refreshAuthorizedPortsState();
     return;
   }
 
   await disconnectUSB(false);
-  setUSBStatus('El puerto USB se desconecto.', 'error');
+  setUSBStatus('El puerto USB se desconecto. Si vuelves a conectar el ESP, intentaremos recuperarlo automaticamente.', 'error');
 }
 
 async function handleLogout(showMessage = true) {
@@ -1823,18 +3099,19 @@ async function handleLogout(showMessage = true) {
   state.token = null;
   state.currentUser = null;
   state.bindings = [];
+  state.oauthProviders = {};
+  state.activeDeviceOAuth = null;
   localStorage.removeItem('token');
   localStorage.removeItem('userId');
 
   elements.loginForm.reset();
   elements.registerForm.reset();
-  elements.manualBindForm.reset();
+  elements.manualBindForm?.reset();
   elements.vaultCreateForm.reset();
   elements.vaultUnlockForm.reset();
   elements.deviceAccountForm.reset();
   syncAccountServiceProfile(true);
 
-  setManualKeyState('Introduce una key hexadecimal de 12 caracteres.', 'info');
   renderBindings();
   renderDeviceAccounts();
   syncDevicePanels();
