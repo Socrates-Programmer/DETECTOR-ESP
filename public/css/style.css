@@ -207,6 +207,11 @@ body::after {
     margin-bottom: 0;
 }
 
+.panel-section-divider {
+    padding-top: 0.35rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .panel-header-inline {
     display: flex;
     justify-content: space-between;
@@ -417,6 +422,7 @@ body::after {
     color: #ffe8e8;
 }
 
+.status-box-warning,
 .status-inline.warning,
 .binding-badge.warning,
 .device-pill.warning {
@@ -488,6 +494,12 @@ code,
     border-radius: var(--radius-md);
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.device-account-main {
+    flex: 1;
+    display: grid;
+    gap: 1rem;
 }
 
 .binding-key {
@@ -658,6 +670,50 @@ code,
     margin-bottom: 0.75rem;
 }
 
+.device-account-fields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.9rem;
+}
+
+.device-account-field {
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.9rem 0.95rem;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.device-account-field-value {
+    min-height: 2.8rem;
+    color: #eef6ff;
+    line-height: 1.55;
+    word-break: break-word;
+}
+
+.device-account-secret {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    align-items: center;
+}
+
+.device-account-secret-input {
+    flex: 1 1 13rem;
+    min-width: 0;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-sm);
+    background: rgba(4, 12, 21, 0.62);
+    color: var(--text);
+    padding: 0.85rem 0.95rem;
+    font-size: 0.96rem;
+}
+
+.device-account-secret-toggle {
+    min-width: 7rem;
+}
+
 .device-account-service {
     font-size: 1.08rem;
 }
@@ -727,6 +783,10 @@ code,
     .device-summary,
     .device-account-form,
     .oauth-providers-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .device-account-fields {
         grid-template-columns: 1fr;
     }
 
