@@ -33,6 +33,7 @@
                             <button id="connectUsbBtn" class="btn btn-primary" type="button">Conectar ESP</button>
                             <button id="disconnectUsbBtn" class="btn btn-secondary" type="button" disabled>Desconectar</button>
                             <button id="refreshDeviceBtn" class="btn btn-outline" type="button" disabled>Actualizar ESP</button>
+                            <button id="resetSerialBtn" class="btn btn-outline" type="button" disabled>Reset serial</button>
                         </div>
 
                         <div id="usbStatus" class="status-box status-box-info">
@@ -149,6 +150,51 @@
                         </section>
 
                         <pre id="serialLog" class="serial-log">Esperando actividad del puerto serial...</pre>
+
+                        <section class="stack support-panel">
+                            <div class="panel-header panel-section-divider">
+                                <p class="panel-kicker">Soporte Windows</p>
+                                <h2>Si el puerto no aparece</h2>
+                            </div>
+
+                            <p class="support-copy">Ejecuta estos bloques en PowerShell como administrador. La web no puede hacerlo sola por permisos del navegador.</p>
+
+                            <div class="support-block">
+                                <strong>1. Instalar el driver USB Serial/JTAG</strong>
+<pre class="support-code">$zip="$env:TEMP\esp32-usb-jtag.zip"
+$dir="$env:TEMP\esp32-usb-jtag"
+
+Invoke-WebRequest "https://dl.espressif.com/dl/idf-driver/idf-driver-esp32-usb-jtag-2021-07-15.zip" -OutFile $zip
+Expand-Archive $zip -DestinationPath $dir -Force
+Get-ChildItem $dir -Recurse -Filter *.inf | ForEach-Object { pnputil /add-driver $_.FullName /install }
+
+Get-PnpDevice -PresentOnly | Where-Object {
+    $_.FriendlyName -match 'COM|USB Serial|JTAG|ESP'
+} | Format-Table Status, Class, FriendlyName -Auto
+
+[System.IO.Ports.SerialPort]::GetPortNames()</pre>
+                            </div>
+
+                            <div class="support-block">
+                                <strong>2. Instalar ESP-IDF y probar el puerto</strong>
+<pre class="support-code">$ErrorActionPreference='Stop'
+
+if (!(Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "Git no está instalado o no está en PATH."
+}
+
+New-Item -ItemType Directory -Force -Path 'C:\esp' | Out-Null
+
+git -c http.version=HTTP/1.1 clone --branch v5.5.4 --depth 1 --single-branch --recursive --shallow-submodules https://github.com/espressif/esp-idf.git C:\esp\esp-idf
+
+Set-ExecutionPolicy -Scope Process Bypass
+& 'C:\esp\esp-idf\install.ps1' esp32c3
+& 'C:\esp\esp-idf\export.ps1'
+
+idf.py --version
+python -m esptool --chip esp32c3 -p COM4 flash_id</pre>
+                            </div>
+                        </section>
                     </article>
                 </div>
             </section>

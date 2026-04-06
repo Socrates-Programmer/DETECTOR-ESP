@@ -68,6 +68,7 @@ function cacheElements() {
   elements.connectUsbBtn = document.getElementById('connectUsbBtn');
   elements.disconnectUsbBtn = document.getElementById('disconnectUsbBtn');
   elements.refreshDeviceBtn = document.getElementById('refreshDeviceBtn');
+  elements.resetSerialBtn = document.getElementById('resetSerialBtn');
   elements.usbStatus = document.getElementById('usbStatus');
   elements.deviceKeyValue = document.getElementById('deviceKeyValue');
   elements.deviceConsoleValue = document.getElementById('deviceConsoleValue');
@@ -109,6 +110,10 @@ function bindEvents() {
 
   elements.refreshDeviceBtn.addEventListener('click', () => {
     void refreshDeviceSnapshot();
+  });
+
+  elements.resetSerialBtn.addEventListener('click', () => {
+    void handleSerialReset();
   });
 
   elements.vaultCreateForm.addEventListener('submit', (event) => {
@@ -195,6 +200,7 @@ function updateUSBButtons(connected) {
   elements.connectUsbBtn.disabled = !('serial' in navigator) || connected || state.autoConnectInProgress;
   elements.disconnectUsbBtn.disabled = !connected;
   elements.refreshDeviceBtn.disabled = !connected;
+  elements.resetSerialBtn.disabled = !connected;
 }
 
 function loadPreferredPortHint() {
@@ -1201,6 +1207,36 @@ async function disconnectUSB(showNotice = true) {
 
   if (showNotice) {
     showAlert('Conexion USB cerrada.', 'info');
+  }
+}
+
+async function handleSerialReset() {
+  if (!state.port) {
+    showAlert('Conecta primero un ESP.', 'error');
+    return;
+  }
+
+  const currentPort = state.port;
+  const previousText = elements.resetSerialBtn.textContent;
+  elements.resetSerialBtn.disabled = true;
+  elements.resetSerialBtn.textContent = 'Reseteando...';
+
+  try {
+    setUSBStatus('Cerrando y reabriendo el puerto serial...', 'info');
+    await disconnectUSB(false);
+    await wait(350);
+    const reopened = await openUSBPort(currentPort, 'auto');
+    if (!reopened) {
+      throw new Error('No fue posible reabrir el puerto serial.');
+    }
+
+    showAlert('Puerto serial reiniciado.', 'success');
+  } catch (error) {
+    setUSBStatus(error.message || 'No fue posible reiniciar el puerto serial.', 'error');
+    showAlert(error.message || 'No fue posible reiniciar el puerto serial.', 'error');
+  } finally {
+    elements.resetSerialBtn.textContent = previousText;
+    updateUSBButtons(Boolean(state.port));
   }
 }
 
