@@ -1,8 +1,10 @@
-const SERIAL_BAUD_RATE = 115200;
+﻿const SERIAL_BAUD_RATE = 115200;
 const KLAUS_PROTOCOL_PREFIX = 'KLAUS';
 const KLAUS_PROTOCOL_VERSION = '1';
 const VAULT_OPERATION_TIMEOUT_MS = 30000;
 const ACCOUNTS_OPERATION_TIMEOUT_MS = 10000;
+const AUTOFILL_OPERATION_TIMEOUT_MS = 12000;
+const AUTOFILL_DEFAULT_DELAY_MS = 4000;
 const DEVICE_KEY_PATTERN = /^[a-f0-9]{12}$/i;
 const SERIAL_PORT_HINT_STORAGE_KEY = 'klaus.serial-port-hint';
 const ESP_USB_VENDOR_IDS = new Set([0x303A, 0x10C4, 0x1A86, 0x0403, 0x067B]);
@@ -27,6 +29,29 @@ const SERVICE_OPTIONS = {
   instagram: {
     label: 'Instagram',
     url: 'https://www.instagram.com/accounts/login'
+  }
+};
+
+const AUTOFILL_PROFILES = {
+  google: {
+    delayMs: 8000,
+    sendEnter: true
+  },
+  youtube: {
+    delayMs: 8000,
+    sendEnter: true
+  },
+  netflix: {
+    delayMs: 7000,
+    sendEnter: true
+  },
+  facebook: {
+    delayMs: 6000,
+    sendEnter: true
+  },
+  instagram: {
+    delayMs: 6500,
+    sendEnter: true
   }
 };
 
@@ -69,6 +94,7 @@ function cacheElements() {
   elements.disconnectUsbBtn = document.getElementById('disconnectUsbBtn');
   elements.refreshDeviceBtn = document.getElementById('refreshDeviceBtn');
   elements.resetSerialBtn = document.getElementById('resetSerialBtn');
+  elements.bleTestBtn = document.getElementById('bleTestBtn');
   elements.usbStatus = document.getElementById('usbStatus');
   elements.deviceKeyValue = document.getElementById('deviceKeyValue');
   elements.deviceConsoleValue = document.getElementById('deviceConsoleValue');
@@ -114,6 +140,10 @@ function bindEvents() {
 
   elements.resetSerialBtn.addEventListener('click', () => {
     void handleSerialReset();
+  });
+
+  elements.bleTestBtn.addEventListener('click', () => {
+    void runBleKeyboardTest();
   });
 
   elements.vaultCreateForm.addEventListener('submit', (event) => {
@@ -201,6 +231,7 @@ function updateUSBButtons(connected) {
   elements.disconnectUsbBtn.disabled = !connected;
   elements.refreshDeviceBtn.disabled = !connected;
   elements.resetSerialBtn.disabled = !connected;
+  elements.bleTestBtn.disabled = !connected;
 }
 
 function loadPreferredPortHint() {
@@ -1025,6 +1056,14 @@ function createAccountCard(account) {
   openButton.dataset.accountId = account.accountId;
   openButton.disabled = !looksLikeHttpUrl(account.url);
 
+  const openAndAutofillButton = document.createElement('button');
+  openAndAutofillButton.type = 'button';
+  openAndAutofillButton.className = 'btn account-autofill-btn';
+  openAndAutofillButton.textContent = 'Abrir + Autofill';
+  openAndAutofillButton.dataset.action = 'open-and-autofill';
+  openAndAutofillButton.dataset.accountId = account.accountId;
+  openAndAutofillButton.disabled = !looksLikeHttpUrl(account.url) || !state.deviceInfo?.autofill_ready;
+
   const deleteButton = document.createElement('button');
   deleteButton.type = 'button';
   deleteButton.className = 'btn account-delete-btn';
@@ -1032,7 +1071,7 @@ function createAccountCard(account) {
   deleteButton.dataset.action = 'delete-account';
   deleteButton.dataset.accountId = account.accountId;
 
-  actions.append(openButton, deleteButton);
+  actions.append(openButton, openAndAutofillButton, deleteButton);
   card.append(main, actions);
   return card;
 }
@@ -1105,6 +1144,11 @@ async function handleAccountListClick(event) {
     return;
   }
 
+  if (action === 'open-and-autofill') {
+    await openAndAutofillAccount(account, button);
+    return;
+  }
+
   if (action === 'delete-account') {
     await deleteAccountFromDevice(account);
   }
@@ -1138,6 +1182,106 @@ async function deleteAccountFromDevice(account) {
   } catch (error) {
     setAccountsStatus(error.message || 'No se pudo eliminar la cuenta.', 'error');
     showAlert(error.message || 'No se pudo eliminar la cuenta.', 'error');
+  }
+}
+
+async function openAndAutofillAccount(account, button) {
+  if (!state.port || !state.deviceInfo?.vault_unlocked) {
+    showAlert('Desbloquea el vault antes de usar autofill.', 'error');
+    return;
+  }
+
+  if (!state.deviceInfo?.ble || !state.deviceInfo?.autofill_ready) {
+    showAlert('El teclado BLE del ESP no esta listo para autofill.', 'error');
+    return;
+  }
+
+  if (!looksLikeHttpUrl(account.url)) {
+    showAlert('La cuenta no tiene una URL valida.', 'error');
+    return;
+  }
+
+  const previousText = button.textContent;
+  const profile = AUTOFILL_PROFILES[account.service] || {
+    delayMs: AUTOFILL_DEFAULT_DELAY_MS,
+    sendEnter: false
+  };
+  let popup = null;
+  button.disabled = true;
+  button.textContent = 'Preparando...';
+
+  try {
+    popup = window.open('about:blank', '_blank');
+    if (!popup) {
+      throw new Error('El navegador bloqueo la nueva pestaña. Permite pop-ups e intentalo otra vez.');
+    }
+
+    try {
+      popup.document.write('<title>KLAUS Autofill</title><body style="font-family: Arial, sans-serif; padding: 24px; background:#08121e; color:#eef6ff;">Preparando autofill...</body>');
+      popup.document.close();
+      popup.focus();
+    } catch (popupError) {
+      // ignored
+    }
+
+    setAccountsStatus(`Programando autofill para ${SERVICE_OPTIONS[account.service]?.label || 'el servicio'}...`, 'info');
+    await sendProtocolRequest(`ACCOUNT|AUTOFILL|${account.accountId}|${profile.sendEnter ? 1 : 0}|${profile.delayMs}`, {
+      timeoutMs: AUTOFILL_OPERATION_TIMEOUT_MS
+    });
+
+    setAccountsStatus(`Abriendo ${SERVICE_OPTIONS[account.service]?.label || 'el servicio'} en otra pestaña. El ESP escribira la cuenta en unos segundos.`, 'success');
+    showAlert(`Abriendo ${SERVICE_OPTIONS[account.service]?.label || 'el servicio'} en otra pestaña y preparando autofill.`, 'success');
+    await wait(180);
+    if (popup && !popup.closed) {
+      popup.location.replace(account.url);
+      try {
+        popup.focus();
+      } catch (focusError) {
+        // ignored
+      }
+    }
+  } catch (error) {
+    if (popup && !popup.closed) {
+      try {
+        popup.close();
+      } catch (closeError) {
+        // ignored
+      }
+    }
+    setAccountsStatus(error.message || 'No fue posible ejecutar autofill.', 'error');
+    showAlert(error.message || 'No fue posible ejecutar autofill.', 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = previousText;
+  }
+}
+async function runBleKeyboardTest() {
+  if (!state.port) {
+    showAlert('Conecta primero un ESP.', 'error');
+    return;
+  }
+
+  if (!state.deviceInfo?.ble || !state.deviceInfo?.autofill_ready) {
+    showAlert('El teclado BLE del ESP no esta listo.', 'error');
+    return;
+  }
+
+  const previousText = elements.bleTestBtn.textContent;
+  elements.bleTestBtn.disabled = true;
+  elements.bleTestBtn.textContent = 'Probando...';
+
+  try {
+    setAccountsStatus('Abre Bloc de notas o un campo de texto. El ESP escribira en 4 segundos.', 'info');
+    await sendProtocolRequest(`ACCOUNT|BLE_TEST|${encodeToken('KLAUS BLE OK', false)}|1|4000`, {
+      timeoutMs: AUTOFILL_OPERATION_TIMEOUT_MS
+    });
+    showAlert('Prueba BLE programada. Deja el cursor en un campo de texto.', 'success');
+  } catch (error) {
+    setAccountsStatus(error.message || 'No fue posible ejecutar la prueba BLE.', 'error');
+    showAlert(error.message || 'No fue posible ejecutar la prueba BLE.', 'error');
+  } finally {
+    elements.bleTestBtn.textContent = previousText;
+    updateUSBButtons(Boolean(state.port));
   }
 }
 
@@ -1358,3 +1502,4 @@ function showAlert(message, type = 'info') {
 function wait(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
+
