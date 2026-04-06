@@ -1216,24 +1216,47 @@ async function handleSerialReset() {
     return;
   }
 
+  if (!('serial' in navigator)) {
+    showAlert('Tu navegador no soporta Web Serial.', 'error');
+    return;
+  }
+
   const currentPort = state.port;
   const previousText = elements.resetSerialBtn.textContent;
   elements.resetSerialBtn.disabled = true;
-  elements.resetSerialBtn.textContent = 'Reseteando...';
+  elements.resetSerialBtn.textContent = 'Seleccionando...';
 
   try {
-    setUSBStatus('Cerrando y reabriendo el puerto serial...', 'info');
+    setUSBStatus('Cerrando el puerto actual para elegir otro...', 'info');
     await disconnectUSB(false);
-    await wait(350);
-    const reopened = await openUSBPort(currentPort, 'auto');
-    if (!reopened) {
-      throw new Error('No fue posible reabrir el puerto serial.');
+
+    const selectedPort = await navigator.serial.requestPort();
+    const opened = await openUSBPort(selectedPort, 'manual');
+    if (!opened) {
+      throw new Error('No fue posible abrir el puerto seleccionado.');
     }
 
-    showAlert('Puerto serial reiniciado.', 'success');
+    showAlert('Puerto serial cambiado.', 'success');
   } catch (error) {
-    setUSBStatus(error.message || 'No fue posible reiniciar el puerto serial.', 'error');
-    showAlert(error.message || 'No fue posible reiniciar el puerto serial.', 'error');
+    if (error?.name === 'NotFoundError') {
+      const restored = await openUSBPort(currentPort, 'auto');
+      if (restored) {
+        setUSBStatus('Seleccion cancelada. Se restauro el puerto anterior.', 'info');
+        showAlert('Seleccion cancelada. Se mantuvo el puerto anterior.', 'info');
+      } else {
+        setUSBStatus('Seleccion cancelada y no se pudo restaurar el puerto anterior.', 'error');
+        showAlert('Seleccion cancelada y no se pudo restaurar el puerto anterior.', 'error');
+      }
+    } else {
+      const restored = await openUSBPort(currentPort, 'auto');
+      if (restored) {
+        setUSBStatus(error.message || 'No fue posible cambiar de puerto. Se restauro el anterior.', 'error');
+        showAlert(error.message || 'No fue posible cambiar de puerto. Se restauro el anterior.', 'error');
+      } else {
+        setUSBStatus(error.message || 'No fue posible cambiar de puerto serial.', 'error');
+        showAlert(error.message || 'No fue posible cambiar de puerto serial.', 'error');
+      }
+    }
   } finally {
     elements.resetSerialBtn.textContent = previousText;
     updateUSBButtons(Boolean(state.port));
